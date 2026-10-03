@@ -27,9 +27,9 @@
 		<key>CMI8788Driver</key>
 		<dict>
 			<key>IOClass</key>
-			<string>com_otak_driver_CMI8788AudioDevice</string>
+			<string>CMI8788AudioDevice</string>
 			<key>IOPCIMatch</key>
-			<string>0x13f68788</string>
+			<string>0x878813f6</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
 			<key>idVendor</key>
