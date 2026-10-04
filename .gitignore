@@ -20,3 +20,6 @@ CMI8788Driver/en.lproj
 CMI8788Driver/CMI8788Driver-Prefix.pch
 # Hackintosh build/EFI/notes (local only)
 hackintosh/
+
+# Build output
+build/
