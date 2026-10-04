@@ -1,257 +1,212 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#include <IOKit/audio/IOAudioLevelControl.h>
+#include <IOKit/audio/IOAudioSelectorControl.h>
+#include <IOKit/audio/IOAudioToggleControl.h>
+#include <IOKit/audio/IOAudioTypes.h>
+
 #include "CMI8788AudioDevice.h"
 #include "CMI8788AudioEngine.h"
-#include "CMI8788AudioControls.h"
 
-//! @class CMI8788AudioDevice
+#define LOG(fmt, ...) IOLog("CMI8788AudioDevice: " fmt "\n", ##__VA_ARGS__)
+
+/* Output selector values (shown as data sources in Sound preferences). */
+enum {
+    kSelectSpeakers   = kIOAudioOutputPortSubTypeLine,        /* 'line' */
+    kSelectHeadphones = kIOAudioOutputPortSubTypeHeadphones,  /* 'hdpn' */
+    kSelectFrontPanel = 'fhdp',
+};
+
+static const UInt8  kInitialVolume = CMI8788Chip::kVolumeSteps - 2 * 30;  /* -30 dB */
+static const SInt32 kInitialOutput = kSelectHeadphones;
+
 OSDefineMetaClassAndStructors(CMI8788AudioDevice, IOAudioDevice);
 
-void CMI8788AudioDevice::free()
+/* Personality key "HeadphoneImpedance" (ohms) picks the st_hp_volume_offset
+ * setting; without it we keep the Linux default of -18 dB (< 32 ohms). */
+SInt8 CMI8788AudioDevice::headphoneGainOffset()
 {
-    IOLog("CMI8788AudioDevice[%p]::free\n", this);
-    if (this->deviceInfo.deviceMap)
-    {
-        this->deviceInfo.deviceMap->release();
-        this->deviceInfo.deviceMap = NULL;
-    }
-    if (this->deviceInfo.pciCard)
-    {
-        this->deviceInfo.pciCard->release();
-        this->deviceInfo.pciCard = NULL;
-    }
-    super::free();
+    OSNumber *ohms = OSDynamicCast(OSNumber, getProperty("HeadphoneImpedance"));
+    if (!ohms)
+        return 2 * -18;
+    UInt32 value = ohms->unsigned32BitValue();
+    if (value < 32)
+        return 2 * -18;
+    if (value < 64)
+        return 2 * -12;
+    if (value < 300)
+        return 2 * -6;
+    return 0;
 }
 
 bool CMI8788AudioDevice::initHardware(IOService *provider)
 {
-    bool result = true;
-    IOLog("CMI8788AudioDevice[%p]::initHardware[%p]\n", this, provider);
-    if (!super::initHardware(provider)) result = false;
-    
-    if (result)
-    {
-        this->deviceInfo.pciCard = OSDynamicCast(IOPCIDevice, provider);
-        if ((result = (bool)this->deviceInfo.pciCard))
-        {
-            this->deviceInfo.deviceMap = this->deviceInfo.pciCard->mapDeviceMemoryWithRegister(kIOPCIConfigBaseAddress0);
-            if ((result = (bool)this->deviceInfo.deviceMap))
-            {
-                this->deviceInfo.pciCard->setMemoryEnable(false);
-                this->deviceInfo.pciCard->setIOEnable(true);
-                this->deviceInfo.pciCard->setBusMasterEnable(true);
-                this->deviceInfo.registers.cs4398_regs = (UInt8*)this->deviceInfo.deviceMap->getVirtualAddress();
-                if ((result = (bool)this->deviceInfo.registers.cs4398_regs))
-                {
-                    this->deviceInfo.pciCard->setMemoryEnable(true);
-                    
-                    this->setDeviceName("C-Media CMI8788 PCI Card");
-                    this->setDeviceShortName("CMI8788");
-                    this->setManufacturerName("C-Media");
-                    //! @todo special CMI8788 init code here
-                    /* set CPEN (control port mode) and power down */
-                    this->writeUInt8(this->deviceInfo.registers.cs4398_regs[7], CS4398_CPEN | CS4398_PDN);
-                    //this->writeUInt8(this->deviceInfo.registers.cs4362a_regs[0x01], CS4392A_PDN | CS4392A_CPEN);
-                    // now configure the chip
-                    /*
-                    this->writeUInt8(this->deviceInfo.registers.cs4398_regs[2], data->cs4398_regs[2]);
-                    this->writeUInt8(chip, 3, CS4398_ATAPI_B_R | CS4398_ATAPI_A_L);
-                    this->writeUInt8(chip, 4, data->cs4398_regs[4]);
-                    this->writeUInt8(chip, 5, data->cs4398_regs[5]);
-                    this->writeUInt8(chip, 6, data->cs4398_regs[6]);
-                    this->writeUInt8(chip, 7, data->cs4398_regs[7]);
-                    */
-                    
-                    result = this->createAudioEngine();
-                }
-            }
-        }
-    }      
-    
-    if (!result && this->deviceInfo.deviceMap)
-    {
-        this->deviceInfo.deviceMap->release();
-        this->deviceInfo.deviceMap = NULL;
+    if (!super::initHardware(provider))
+        return false;
+
+    IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
+    if (!pci || !chip_.attach(pci))
+        return false;
+    pci_ = pci;
+    pci_->retain();
+    chipAttached_ = true;
+
+    UInt16 subdevice = chip_.identify();
+    if (!subdevice) {
+        LOG("not a Xonar Essence STX / STX II, not attaching");
+        return false;
     }
-    
-    return result;
+
+    chip_.configurePCIeBridge();
+    chip_.initChip();
+    chip_.initModel(subdevice);
+    chip_.setHeadphoneGainOffset(headphoneGainOffset());
+
+    setDeviceName(chip_.modelName());
+    setDeviceShortName("Xonar STX");
+    setManufacturerName("ASUS");
+
+    if (!createAudioEngine()) {
+        chip_.shutdown();
+        return false;
+    }
+
+    /* the engine's interrupt handler exists now: watch the power connector */
+    chip_.enableInterrupts(OXYGEN_INT_GPIO);
+    return true;
 }
 
 bool CMI8788AudioDevice::createAudioEngine()
 {
-    bool result = true;
-    CMI8788AudioEngine *audioEngine = new CMI8788AudioEngine();
-    IOAudioControl *tmpCtrl;
-    
-    IOLog("CMI8788AudioDevice[%p]::createAudioEngine()\n", this);
-    
-    if ((result = (bool)audioEngine) && (result = audioEngine->init(&this->deviceInfo.registers)))
+    CMI8788AudioEngine *engine = new CMI8788AudioEngine;
+    if (!engine || !engine->initWithChip(&chip_, pci_)) {
+        OSSafeReleaseNULL(engine);
+        return false;
+    }
+
+    /* PCM1792A attenuator: 0.5 dB steps from -60 dB to 0 dB */
+    IOAudioControl *control;
+    static const struct { UInt32 channel; const char *name; } channels[] = {
+        { kIOAudioControlChannelIDDefaultLeft, "Left" },
+        { kIOAudioControlChannelIDDefaultRight, "Right" },
+    };
+    for (const auto &ch : channels) {
+        control = IOAudioLevelControl::createVolumeControl(
+            kInitialVolume, 0, CMI8788Chip::kVolumeSteps, -(60 << 16), 0,
+            ch.channel, ch.name, 0, kIOAudioControlUsageOutput);
+        if (!control)
+            goto fail;
+        control->setValueChangeHandler(volumeChangeHandler, this);
+        engine->addDefaultAudioControl(control);
+        control->release();
+    }
+
+    control = IOAudioToggleControl::createMuteControl(
+        false, kIOAudioControlChannelIDAll, "All", 0,
+        kIOAudioControlUsageOutput);
+    if (!control)
+        goto fail;
+    control->setValueChangeHandler(muteChangeHandler, this);
+    engine->addDefaultAudioControl(control);
+    control->release();
+
     {
-        // Output mute
-        if ((result = (bool)(tmpCtrl = CMI8788OutputMute::init())))
-        {
-            tmpCtrl->setValueChangeHandler((IOAudioControl::IntValueChangeHandler)this->outputMuteChangeHandler, this);
-            audioEngine->addDefaultAudioControl(tmpCtrl);
-            tmpCtrl->release();
-            
-            // Input mute
-            if ((result = (bool)(tmpCtrl = CMI8788InputMute::init())))
-            {
-                tmpCtrl->setValueChangeHandler((IOAudioControl::IntValueChangeHandler)this->inputMuteChangeHandler, this);
-                audioEngine->addDefaultAudioControl(tmpCtrl);
-                tmpCtrl->release();
-                
-                // Left Volume
-                if ((result = (bool)(tmpCtrl = CMI8788LeftVolume::init())))
-                {
-                    tmpCtrl->setValueChangeHandler((IOAudioControl::IntValueChangeHandler)this->volumeChangeHandler, this);
-                    audioEngine->addDefaultAudioControl(tmpCtrl);
-                    tmpCtrl->release();
-                        
-                    // Right Volume
-                    if ((result = (bool)(tmpCtrl = CMI8788RightVolume::init())))
-                    {
-                        tmpCtrl->setValueChangeHandler((IOAudioControl::IntValueChangeHandler)this->volumeChangeHandler, this);
-                        audioEngine->addDefaultAudioControl(tmpCtrl);
-                        tmpCtrl->release();
-                                
-                        // Input Gain
-                        if ((result = (bool)(tmpCtrl = CMI8788InputGain::init())))
-                        {
-                            tmpCtrl->setValueChangeHandler((IOAudioControl::IntValueChangeHandler)this->gainChangeHandler, this);
-                            audioEngine->addDefaultAudioControl(tmpCtrl);
-                            tmpCtrl->release();
-                                        
-                            this->activateAudioEngine(audioEngine);
-                        }
-                    }
-                }
-            }
-        }
+        IOAudioSelectorControl *selector = IOAudioSelectorControl::createOutputSelector(
+            kInitialOutput, kIOAudioControlChannelIDAll, "All");
+        if (!selector)
+            goto fail;
+        selector->addAvailableSelection(kSelectHeadphones, "Headphones");
+        selector->addAvailableSelection(kSelectSpeakers, "Line Out");
+        selector->addAvailableSelection(kSelectFrontPanel, "Front Panel Headphones");
+        selector->setValueChangeHandler(outputChangeHandler, this);
+        engine->addDefaultAudioControl(selector);
+        selector->release();
     }
-    
-    if (audioEngine) audioEngine->release();
-    
-    return result;
+
+    /* Controls don't call their handlers for the initial value. */
+    volume_[0] = volume_[1] = kInitialVolume;
+    chip_.setOutput(CMI8788Chip::kOutputHeadphones);
+    chip_.setVolume(volume_[0], volume_[1]);
+    chip_.setMute(false);
+
+    if (activateAudioEngine(engine) != kIOReturnSuccess)
+        goto fail;
+    engine->release();
+    return true;
+
+fail:
+    LOG("cannot create audio engine");
+    engine->release();
+    return false;
 }
 
-IOReturn CMI8788AudioDevice::volumeChangeHandler(IOService *target, IOAudioControl *volumeControl, SInt32 oldValue, SInt32 newValue)
+void CMI8788AudioDevice::stop(IOService *provider)
 {
-    IOReturn result = kIOReturnBadArgument;
-    CMI8788AudioDevice *audioDevice;
-    
-    audioDevice = (CMI8788AudioDevice *)target;
-    if (audioDevice) 
-        result = audioDevice->volumeChanged(volumeControl, oldValue, newValue);
-        
-    return result;
+    super::stop(provider);      /* stops and detaches the engine first */
+    if (chipAttached_)
+        chip_.shutdown();
 }
 
-IOReturn CMI8788AudioDevice::volumeChanged(IOAudioControl *volumeControl, SInt32 oldValue, SInt32 newValue)
+void CMI8788AudioDevice::free()
 {
-    //! @todo implement changes
-    return kIOReturnSuccess;
-}
-
-IOReturn CMI8788AudioDevice::outputMuteChangeHandler(IOService *target, IOAudioControl *muteControl, SInt32 oldValue, SInt32 newValue)
-{
-    IOReturn result = kIOReturnBadArgument;
-    CMI8788AudioDevice *audioDevice;
-    
-    audioDevice = (CMI8788AudioDevice *)target;
-    if (audioDevice) 
-        result = audioDevice->outputMuteChanged(muteControl, oldValue, newValue);
-    
-	return result;
-}
-
-IOReturn CMI8788AudioDevice::outputMuteChanged(IOAudioControl *muteControl, SInt32 oldValue, SInt32 newValue)
-{
-    //! @todo implement changes
-    return kIOReturnSuccess;
-}
-
-IOReturn CMI8788AudioDevice::gainChangeHandler(IOService *target, IOAudioControl *gainControl, SInt32 oldValue, SInt32 newValue)
-{
-    IOReturn result = kIOReturnBadArgument;
-    CMI8788AudioDevice *audioDevice;
-    
-    audioDevice = (CMI8788AudioDevice *)target;
-    if (audioDevice) {
-        result = audioDevice->gainChanged(gainControl, oldValue, newValue);
+    if (chipAttached_) {
+        chip_.detach();
+        chipAttached_ = false;
     }
-    
-    return result;
+    OSSafeReleaseNULL(pci_);
+    super::free();
 }
 
-IOReturn CMI8788AudioDevice::gainChanged(IOAudioControl *gainControl, SInt32 oldValue, SInt32 newValue)
+IOReturn CMI8788AudioDevice::volumeChangeHandler(OSObject *target, IOAudioControl *control,
+                                                 SInt32 oldValue, SInt32 newValue)
 {
-    //! @todo implement changes
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device || !control)
+        return kIOReturnBadArgument;
+    if (newValue < 0 || newValue > CMI8788Chip::kVolumeSteps)
+        return kIOReturnBadArgument;
+    switch (control->getChannelID()) {
+    case kIOAudioControlChannelIDDefaultLeft:
+        device->volume_[0] = (UInt8)newValue;
+        break;
+    case kIOAudioControlChannelIDDefaultRight:
+        device->volume_[1] = (UInt8)newValue;
+        break;
+    default:
+        device->volume_[0] = device->volume_[1] = (UInt8)newValue;
+        break;
+    }
+    device->chip_.setVolume(device->volume_[0], device->volume_[1]);
     return kIOReturnSuccess;
 }
 
-IOReturn CMI8788AudioDevice::inputMuteChangeHandler(IOService *target, IOAudioControl *muteControl, SInt32 oldValue, SInt32 newValue)
+IOReturn CMI8788AudioDevice::muteChangeHandler(OSObject *target, IOAudioControl *control,
+                                               SInt32 oldValue, SInt32 newValue)
 {
-    IOReturn result = kIOReturnBadArgument;
-    CMI8788AudioDevice *audioDevice;
-    
-    audioDevice = (CMI8788AudioDevice *)target;
-    if (audioDevice) 
-        result = audioDevice->inputMuteChanged(muteControl, oldValue, newValue);
-    
-    return result;
-}
-
-IOReturn CMI8788AudioDevice::inputMuteChanged(IOAudioControl *muteControl, SInt32 oldValue, SInt32 newValue)
-{
-    //! @todo implement changes
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device)
+        return kIOReturnBadArgument;
+    device->chip_.setMute(newValue != 0);
     return kIOReturnSuccess;
 }
 
-UInt8 CMI8788AudioDevice::readUInt8(UInt16 reg)
+IOReturn CMI8788AudioDevice::outputChangeHandler(OSObject *target, IOAudioControl *control,
+                                                 SInt32 oldValue, SInt32 newValue)
 {
-	return this->deviceInfo.pciCard->ioRead8(reg, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::writeUInt8(UInt16 reg, UInt8 value)
-{
-	this->deviceInfo.pciCard->ioWrite8(reg, value, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::setUInt8Bit(UInt16 reg, UInt8 bit)
-{
-	this->deviceInfo.pciCard->ioWrite8(reg, this->deviceInfo.pciCard->ioRead8(reg, this->deviceInfo.deviceMap) | bit, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::clearUInt8Bit(UInt16 reg, UInt8 bit)
-{
-	this->deviceInfo.pciCard->ioWrite8(reg, this->deviceInfo.pciCard->ioRead8(reg, this->deviceInfo.deviceMap) & ~bit, this->deviceInfo.deviceMap);
-}
-
-UInt16 CMI8788AudioDevice::readUInt16(UInt16 reg)
-{
-	return this->deviceInfo.pciCard->ioRead16(reg, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::writeUInt16(UInt16 reg, UInt16 value)
-{
-	this->deviceInfo.pciCard->ioWrite16(reg, value, this->deviceInfo.deviceMap);
-}
-
-UInt32 CMI8788AudioDevice::readUInt32(UInt16 reg)
-{
-	return this->deviceInfo.pciCard->ioRead32(reg, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::writeUInt32(UInt16 reg, UInt32 value)
-{
-	this->deviceInfo.pciCard->ioWrite32(reg, value, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::setUInt32Bit(UInt16 reg, UInt32 bit)
-{
-	this->deviceInfo.pciCard->ioWrite32(reg, this->deviceInfo.pciCard->ioRead32(reg, this->deviceInfo.deviceMap) | bit, this->deviceInfo.deviceMap);
-}
-
-void CMI8788AudioDevice::clearUInt32Bit(UInt16 reg, UInt32 bit)
-{
-	this->deviceInfo.pciCard->ioWrite32(reg, this->deviceInfo.pciCard->ioRead32(reg, this->deviceInfo.deviceMap) & ~bit, this->deviceInfo.deviceMap);
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device)
+        return kIOReturnBadArgument;
+    switch (newValue) {
+    case kSelectSpeakers:
+        device->chip_.setOutput(CMI8788Chip::kOutputSpeakers);
+        break;
+    case kSelectHeadphones:
+        device->chip_.setOutput(CMI8788Chip::kOutputHeadphones);
+        break;
+    case kSelectFrontPanel:
+        device->chip_.setOutput(CMI8788Chip::kOutputFrontPanel);
+        break;
+    default:
+        return kIOReturnBadArgument;
+    }
+    return kIOReturnSuccess;
 }

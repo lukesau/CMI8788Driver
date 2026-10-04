@@ -1,183 +1,273 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#include <IOKit/audio/IOAudioBlitterLibDispatch.h>
+#include <IOKit/audio/IOAudioStream.h>
+
 #include "CMI8788AudioEngine.h"
 
-#define INITIAL_SAMPLE_RATE	CMI8788Freqs::k44
-#define NUM_SAMPLE_FRAMES	16384
-#define NUM_CHANNELS		2
-#define BIT_DEPTH			CMI8788BitDepths::b16
+#define NUM_SAMPLE_FRAMES   16384
+#define NUM_CHANNELS        2
+#define BYTES_PER_SAMPLE    4
+#define BYTES_PER_FRAME     (NUM_CHANNELS * BYTES_PER_SAMPLE)
+#define BUFFER_SIZE         (NUM_SAMPLE_FRAMES * BYTES_PER_FRAME)
+#define INITIAL_SAMPLE_RATE 48000
 
-#define BUFFER_SIZE			(NUM_SAMPLE_FRAMES * NUM_CHANNELS * BIT_DEPTH / 8)
+/* The multichannel DMA FIFO is 1024 bytes (oxygen_pcm.c FIFO_BYTES_MULTICH),
+ * the recording one 256 bytes: that much is in flight past the DMA pointer. */
+#define OUTPUT_LATENCY_FRAMES (1024 / BYTES_PER_FRAME)
+#define INPUT_LATENCY_FRAMES  (256 / BYTES_PER_FRAME)
+/* Keep CoreAudio this far ahead of the DMA read pointer (burst is 8 dwords). */
+#define SAMPLE_OFFSET_FRAMES  32
 
-//! @class CMI8788AudioEngine 
+#define DMA_CHANNELS (OXYGEN_CHANNEL_MULTICH | OXYGEN_CHANNEL_B)
+
+#define LOG(fmt, ...) IOLog("CMI8788AudioEngine: " fmt "\n", ##__VA_ARGS__)
+
+static const UInt32 kSampleRates[] = { 44100, 48000, 88200, 96000, 176400, 192000 };
+
 OSDefineMetaClassAndStructors(CMI8788AudioEngine, IOAudioEngine);
 
-bool CMI8788AudioEngine::init(XonarD1Regs *registers)
+bool CMI8788AudioEngine::initWithChip(CMI8788Chip *chip, IOPCIDevice *pci)
 {
-    bool result = (bool)registers;
-    
-    IOLog("CMI8788AudioEngine[%p]::init(%p)\n", this, registers);
-    
-    if (super::init(NULL) && result)
-    {
-        this->registers = registers;
-        this->currentSampleRate = 0;
-        this->currentResolution = 0;
-    }
-    else result = false;
-    
-    return result;
+    if (!chip || !pci || !super::init(NULL))
+        return false;
+    chip_ = chip;
+    pci_ = pci;
+    pci_->retain();
+    return true;
 }
 
-void CMI8788AudioEngine::free()
+bool CMI8788AudioEngine::allocateDMABuffer(DMABuffer &buffer, UInt32 bytes)
 {
-    IOLog("CMI8788AudioEngine[%p]::free()\n", this);
-    if (this->interruptEventSource)
-    {
-        this->interruptEventSource->disable();
-        this->interruptEventSource->release();
-        this->interruptEventSource = NULL;
+    /* The CMI8788 takes 32-bit bus addresses for one contiguous buffer. */
+    buffer.memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+        kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous, bytes,
+        0x00000000FFFFF000ULL);
+    if (!buffer.memory)
+        return false;
+    buffer.address = buffer.memory->getBytesNoCopy();
+    bzero(buffer.address, bytes);
+
+    buffer.command = IODMACommand::withSpecification(kIODMACommandOutputHost64, 32, 0,
+                                                     IODMACommand::kMapped, 0, 1);
+    if (!buffer.command || buffer.command->setMemoryDescriptor(buffer.memory) != kIOReturnSuccess)
+        return false;
+
+    IODMACommand::Segment64 segment;
+    UInt32 numSegments = 1;
+    UInt64 offset = 0;
+    if (buffer.command->gen64IOVMSegments(&offset, &segment, &numSegments) != kIOReturnSuccess ||
+        numSegments != 1 || segment.fLength < bytes || segment.fIOVMAddr > 0xffffffffULL) {
+        LOG("DMA buffer is not one 32-bit segment");
+        return false;
     }
-    if (this->outputBuffer)
-    {
-        //! @todo unalloc the buffer with the opposite way than the one used in initHardware
-        outputBuffer = NULL; // memleak here
-    }
-    if (this->inputBuffer)
-    {
-        //! @todo unalloc the buffer with the opposite way than the one used in initHardware
-        inputBuffer = NULL; // memleak here
-    }
-    
-    super::free();
+    buffer.busAddress = (UInt32)segment.fIOVMAddr;
+    return true;
 }
 
-void CMI8788AudioEngine::stop(IOService *provider)
+void CMI8788AudioEngine::freeDMABuffer(DMABuffer &buffer)
 {
-    if (this->interruptEventSource)
-    {
-        IOWorkLoop *wl = this->getWorkLoop();
-        if (wl)
-            wl->removeEventSource(this->interruptEventSource);
-        this->interruptEventSource->release();
-        this->interruptEventSource = NULL;
+    if (buffer.command) {
+        buffer.command->clearMemoryDescriptor();
+        OSSafeReleaseNULL(buffer.command);
     }
-    super::stop(provider);
+    OSSafeReleaseNULL(buffer.memory);
+    buffer.address = NULL;
+    buffer.busAddress = 0;
+}
+
+IOAudioStream *CMI8788AudioEngine::createStream(IOAudioStreamDirection direction, DMABuffer &buffer)
+{
+    IOAudioStream *stream = new IOAudioStream;
+    if (!stream)
+        return NULL;
+    if (!stream->initWithAudioEngine(this, direction, 1)) {
+        stream->release();
+        return NULL;
+    }
+    stream->setSampleBuffer(buffer.address, BUFFER_SIZE);
+
+    IOAudioStreamFormat format = {
+        NUM_CHANNELS,
+        kIOAudioStreamSampleFormatLinearPCM,
+        kIOAudioStreamNumericRepresentationSignedInt,
+        24,                                 /* bit depth: the chip uses the top 24 */
+        32,                                 /* bit width */
+        kIOAudioStreamAlignmentHighByte,
+        kIOAudioStreamByteOrderLittleEndian,
+        true,                               /* mixable */
+        0
+    };
+    for (UInt32 rate : kSampleRates) {
+        IOAudioSampleRate sampleRate = { rate, 0 };
+        stream->addAvailableFormat(&format, &sampleRate, &sampleRate);
+    }
+    /* the hardware rate is programmed by initHardware, not via the driver */
+    stream->setFormat(&format, false);
+    return stream;
 }
 
 bool CMI8788AudioEngine::initHardware(IOService *provider)
 {
-    bool result = true;
-    IOAudioSampleRate initialSampleRate;
-    IOAudioStream *tmpStream;
-    IOWorkLoop *workLoop;
-    
-    initialSampleRate.fraction = 0;
-    initialSampleRate.whole = CMI8788Freqs::k44;
-    this->setDescription("CMI8788 driven by OtaK");
-    this->setSampleRate(&initialSampleRate);
-    this->setNumSampleFramesPerBuffer(NUM_SAMPLE_FRAMES);
-    if ((result = (bool)(workLoop = this->getWorkLoop())))
-    {
-        this->interruptEventSource = IOFilterInterruptEventSource::filterInterruptEventSource(this, CMI8788AudioEngine::interruptHandler, CMI8788AudioEngine::interruptFilter, audioDevice->getProvider());
-        if ((result = (bool)this->interruptEventSource))
-        {
-            this->interruptEventSource->enable();
-            workLoop->addEventSource(this->interruptEventSource);
-            //! @todo Allocate I/O buffers correct way (IOMallocContiguous deprecated)
-            
-            //! @todo create a new audio stream for each channel on the card
-            tmpStream = this->createNewAudioStream(kIOAudioStreamDirectionOutput, this->outputBuffer, BUFFER_SIZE, 0);
-            this->addAudioStream(tmpStream);
-            tmpStream->release();
-            
-            tmpStream = this->createNewAudioStream(kIOAudioStreamDirectionInput, this->inputBuffer, BUFFER_SIZE, 1);
-            this->addAudioStream(tmpStream);
-            tmpStream->release();
-            
-            //! @todo and then write the addresses for each one in the card registers, for it to R/W in the buffers
-        }
+    if (!super::initHardware(provider))
+        return false;
+
+    setDescription(chip_->modelName());
+    IOAudioSampleRate initialRate = { INITIAL_SAMPLE_RATE, 0 };
+    setSampleRate(&initialRate);
+    setNumSampleFramesPerBuffer(NUM_SAMPLE_FRAMES);
+    setSampleOffset(SAMPLE_OFFSET_FRAMES);
+    setOutputSampleLatency(OUTPUT_LATENCY_FRAMES);
+    setInputSampleLatency(INPUT_LATENCY_FRAMES);
+
+    if (!allocateDMABuffer(output_, BUFFER_SIZE) || !allocateDMABuffer(input_, BUFFER_SIZE)) {
+        LOG("cannot allocate DMA buffers");
+        return false;
     }
-    
-    return result;
+
+    /* oxygen_hw_params: one interrupt per buffer wrap, used for timestamps */
+    chip_->setDMABuffer(OXYGEN_CHANNEL_MULTICH, output_.busAddress, BUFFER_SIZE, BUFFER_SIZE);
+    chip_->setDMABuffer(OXYGEN_CHANNEL_B, input_.busAddress, BUFFER_SIZE, BUFFER_SIZE);
+    chip_->setPlaybackRate(INITIAL_SAMPLE_RATE);
+    chip_->setCaptureRate(INITIAL_SAMPLE_RATE);
+
+    IOAudioStream *stream = createStream(kIOAudioStreamDirectionOutput, output_);
+    if (!stream)
+        return false;
+    addAudioStream(stream);
+    stream->release();
+
+    stream = createStream(kIOAudioStreamDirectionInput, input_);
+    if (!stream)
+        return false;
+    addAudioStream(stream);
+    stream->release();
+
+    /* last, so no failure path has to unregister it */
+    IOWorkLoop *workLoop = getWorkLoop();
+    if (!workLoop)
+        return false;
+    interruptSource_ = IOFilterInterruptEventSource::filterInterruptEventSource(
+        this, interruptHandler, interruptFilter, pci_, 0);
+    if (!interruptSource_ || workLoop->addEventSource(interruptSource_) != kIOReturnSuccess) {
+        LOG("cannot register interrupt handler");
+        OSSafeReleaseNULL(interruptSource_);
+        return false;
+    }
+    interruptSource_->enable();
+
+    LOG("output DMA at 0x%08x, input DMA at 0x%08x", output_.busAddress, input_.busAddress);
+    return true;
 }
 
-IOAudioStream* CMI8788AudioEngine::createNewAudioStream(IOAudioStreamDirection direction, void *sampleBuffer, UInt32 sampleBufferSize, UInt32 channel)
+void CMI8788AudioEngine::stop(IOService *provider)
 {
-    IOAudioStream *audioStream = new IOAudioStream();
-    if (audioStream) 
-    {
-        if (!audioStream->initWithAudioEngine(this, direction, 1)) 
-            audioStream->release();
-        else 
-        {
-            IOAudioSampleRate rate;
-            IOAudioStreamFormat format = {
-                2,												// num channels
-                kIOAudioStreamSampleFormatLinearPCM,			// sample format
-                kIOAudioStreamNumericRepresentationSignedInt,	// numeric foÒrmat
-                CMI8788BitDepths::b16,										// bit depth
-                CMI8788BitDepths::b16,										// bit width
-                kIOAudioStreamAlignmentHighByte,
-                kIOAudioStreamByteOrderBigEndian,
-                true,
-                channel
-            };
-            
-            // As part of creating a new IOAudioStream, its sample buffer needs to be set
-            // It will automatically create a mix buffer should it be needed
-            audioStream->setSampleBuffer(sampleBuffer, sampleBufferSize);
-            
-            rate.fraction = 0;
-            rate.whole = CMI8788Freqs::k44;
-			this->currentSampleRate = CMI8788Freqs::k44;
-			
-            audioStream->addAvailableFormat(&format, &rate, &rate); // 16b/44k
-            if (direction == kIOAudioStreamDirectionOutput)
-            {
-                format.fBitDepth = format.fBitWidth = CMI8788BitDepths::b24;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 24b/44k
-                rate.whole = CMI8788Freqs::k48;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 24b/48k
-                format.fBitDepth = format.fBitWidth = CMI8788BitDepths::b16;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 16b/48k
-                rate.whole = CMI8788Freqs::k96;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 16b/96k
-                format.fBitDepth = format.fBitWidth = CMI8788BitDepths::b24;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 24b/96k
-                rate.whole = CMI8788Freqs::k192;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 24b/192k
-                format.fBitDepth = format.fBitWidth = CMI8788BitDepths::b16;
-                audioStream->addAvailableFormat(&format, &rate, &rate); // 16b/192k
-			}
-            // Finally, the IOAudioStream's current format needs to be indicated
-            audioStream->setFormat(&format);
-        }
+    chip_->stopDMA(DMA_CHANNELS);
+    chip_->disableInterrupts(OXYGEN_CHANNEL_MULTICH);
+    if (interruptSource_) {
+        interruptSource_->disable();
+        IOWorkLoop *workLoop = getWorkLoop();
+        if (workLoop)
+            workLoop->removeEventSource(interruptSource_);
+        OSSafeReleaseNULL(interruptSource_);
     }
-    return audioStream;
+    super::stop(provider);
 }
 
+void CMI8788AudioEngine::free()
+{
+    OSSafeReleaseNULL(interruptSource_);
+    freeDMABuffer(output_);
+    freeDMABuffer(input_);
+    OSSafeReleaseNULL(pci_);
+    super::free();
+}
 
+/* oxygen_pointer */
 UInt32 CMI8788AudioEngine::getCurrentSampleFrame()
 {
-    // not complete
-    return NUM_SAMPLE_FRAMES;
+    UInt32 offset = chip_->dmaPosition(OXYGEN_CHANNEL_MULTICH) - output_.busAddress;
+    return (offset / BYTES_PER_FRAME) % NUM_SAMPLE_FRAMES;
 }
 
-void CMI8788AudioEngine::interruptHandler(OSObject *owner, IOInterruptEventSource *source, int count)
+/* oxygen_prepare + oxygen_trigger(START), both directions together */
+IOReturn CMI8788AudioEngine::performAudioEngineStart()
 {
-    return;
+    chip_->flushDMA(DMA_CHANNELS);
+    chip_->enableInterrupts(OXYGEN_CHANNEL_MULTICH);
+    takeTimeStamp(false);
+    chip_->startDMA(DMA_CHANNELS);
+    return kIOReturnSuccess;
 }
 
+/* oxygen_trigger(STOP) + oxygen_hw_free */
+IOReturn CMI8788AudioEngine::performAudioEngineStop()
+{
+    chip_->stopDMA(DMA_CHANNELS);
+    chip_->disableInterrupts(OXYGEN_CHANNEL_MULTICH);
+    return kIOReturnSuccess;
+}
+
+IOReturn CMI8788AudioEngine::performFormatChange(IOAudioStream *audioStream,
+                                                 const IOAudioStreamFormat *newFormat,
+                                                 const IOAudioSampleRate *newSampleRate)
+{
+    if (newSampleRate) {
+        LOG("sample rate -> %u", newSampleRate->whole);
+        chip_->setPlaybackRate(newSampleRate->whole);
+        chip_->setCaptureRate(newSampleRate->whole);
+    }
+    return kIOReturnSuccess;
+}
+
+IOReturn CMI8788AudioEngine::clipOutputSamples(const void *mixBuf, void *sampleBuf,
+                                               UInt32 firstSampleFrame, UInt32 numSampleFrames,
+                                               const IOAudioStreamFormat *streamFormat,
+                                               IOAudioStream *audioStream)
+{
+    UInt32 first = firstSampleFrame * streamFormat->fNumChannels;
+    IOAF_Float32ToNativeInt32((const Float32 *)mixBuf + first, (SInt32 *)sampleBuf + first,
+                              numSampleFrames * streamFormat->fNumChannels);
+    return kIOReturnSuccess;
+}
+
+IOReturn CMI8788AudioEngine::convertInputSamples(const void *sampleBuf, void *destBuf,
+                                                 UInt32 firstSampleFrame, UInt32 numSampleFrames,
+                                                 const IOAudioStreamFormat *streamFormat,
+                                                 IOAudioStream *audioStream)
+{
+    UInt32 first = firstSampleFrame * streamFormat->fNumChannels;
+    IOAF_NativeInt32ToFloat32((const SInt32 *)sampleBuf + first, (Float32 *)destBuf,
+                              numSampleFrames * streamFormat->fNumChannels);
+    return kIOReturnSuccess;
+}
+
+/* oxygen_interrupt, primary-interrupt half. The line may be shared. */
 bool CMI8788AudioEngine::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *source)
 {
-    CMI8788AudioEngine *audioEngine = OSDynamicCast(CMI8788AudioEngine, owner);
-    if (audioEngine)
-        audioEngine->filterInterrupt(source->getIntIndex());
-    
+    CMI8788AudioEngine *engine = (CMI8788AudioEngine *)owner;
+    UInt16 status = engine->chip_->interruptStatus();
+    if (status == 0 || status == 0xffff)
+        return false;
+    engine->chip_->ackInterrupts(status);
+
+    if (status & OXYGEN_CHANNEL_MULTICH)
+        engine->takeTimeStamp();
+    if (status & OXYGEN_INT_GPIO) {
+        engine->gpioChanged_ = true;
+        return true;    /* handle on the work loop */
+    }
     return false;
 }
 
-void CMI8788AudioEngine::filterInterrupt(int index)
+/* xonar_ext_power_gpio_changed */
+void CMI8788AudioEngine::interruptHandler(OSObject *owner, IOInterruptEventSource *source, int count)
 {
-    //! @todo write interrupt code to registers
-    return;
+    CMI8788AudioEngine *engine = (CMI8788AudioEngine *)owner;
+    if (!engine->gpioChanged_)
+        return;
+    engine->gpioChanged_ = false;
+    if (engine->chip_->hasExternalPower())
+        LOG("external power restored");
+    else
+        LOG("external power cable unplugged!");
 }

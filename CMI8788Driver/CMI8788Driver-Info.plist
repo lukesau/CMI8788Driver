@@ -32,10 +32,6 @@
 			<string>0x878813f6</string>
 			<key>IOProviderClass</key>
 			<string>IOPCIDevice</string>
-			<key>idVendor</key>
-			<string>13f6</string>
-			<key>idProduct</key>
-			<string>8788</string>
 		</dict>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
@@ -49,6 +45,8 @@
 		<key>com.apple.kpi.iokit</key>
 		<string>19.0</string>
 		<key>com.apple.kpi.libkern</key>
+		<string>19.0</string>
+		<key>com.apple.kpi.mach</key>
 		<string>19.0</string>
 	</dict>
 </dict>

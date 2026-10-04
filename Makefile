@@ -27,7 +27,8 @@ ARCHFLAGS := -arch x86_64 -mmacosx-version-min=$(MINOS)
 KERNFLAGS := -mkernel -fapple-kext -nostdinc -fno-builtin -fno-common \
              -isystem $(KERNEL_HEADERS) \
              -DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT
-WARNFLAGS := -Wall -Wno-unused-parameter -Wno-#warnings -Wno-deprecated-declarations  # IOAudioFamily is deprecated but still ships
+# IOAudioFamily is deprecated (but still ships), so silence its deprecation noise.
+WARNFLAGS := -Wall -Wno-unused-parameter -Wno-\#warnings -Wno-deprecated-declarations
 CXXFLAGS  := $(ARCHFLAGS) $(KERNFLAGS) $(WARNFLAGS) -std=gnu++14 -fno-exceptions -fno-rtti -O2 -g
 CFLAGS    := $(ARCHFLAGS) $(filter-out -fapple-kext,$(KERNFLAGS)) $(WARNFLAGS) -O2 -g
 LDFLAGS   := $(ARCHFLAGS) -nostdlib -Xlinker -kext -lkmodc++ -lkmod -lcc_kext
