@@ -47,6 +47,7 @@ private:
                                          SInt32 oldValue, SInt32 newValue);
     void setMonitor(bool on, bool full, IOAudioControl *changedControl);
     void setInputSource(SInt32 selection, IOAudioControl *changedControl);
+    void setOutputDestination(SInt32 selection, IOAudioControl *changedControl);
 
     CMI8788Chip chip_;
     IOPCIDevice *pci_;
@@ -59,6 +60,7 @@ private:
     IOAudioControl *passThruMute_;
     IOAudioControl *passThruLevel_;
     IOAudioControl *inputSelector_;
+    IOAudioControl *outputSelector_;
     bool chipAttached_;
     UInt8 volume_[2];
 };

@@ -14,6 +14,7 @@ let kextSupportPath = "/Library/Application Support/CMI8788Driver/CMI8788Driver.
 
 enum Setting: String, CaseIterable {
     case impedance = "HeadphoneImpedance"   // NSNumber, ohms
+    case output = "OutputDestination"       // "headphones" | "line" | "frontpanel"
     case input = "InputSource"              // "line" | "mic" | "frontmic"
     case monitorLevel = "InputMonitorLevel" // "half" | "full": level used when on
     case monitor = "InputMonitor"           // "off" | "half" | "full"
@@ -34,6 +35,11 @@ let impedanceChoices = [
     Choice(title: "32–64 Ω (−12 dB)", value: 32),
     Choice(title: "64–300 Ω (−6 dB)", value: 64),
     Choice(title: "300–600 Ω (0 dB)", value: 300),
+]
+let outputChoices = [
+    Choice(title: "Headphones", value: "headphones"),
+    Choice(title: "Line Out", value: "line"),
+    Choice(title: "Front Panel Headphones", value: "frontpanel"),
 ]
 let inputChoices = [
     Choice(title: "Line In", value: "line"),
@@ -218,6 +224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(disabled(Driver.modelName))
         menu.addItem(.separator())
 
+        let output = Driver.read(.output) as? String ?? "headphones"
+        addSubmenu("Output", .output, outputChoices) { $0 as? String == output }
         let input = Driver.read(.input) as? String ?? "line"
         addSubmenu("Input", .input, inputChoices) { $0 as? String == input }
         let monitor = Driver.read(.monitor) as? String ?? "off"

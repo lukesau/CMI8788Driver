@@ -33,6 +33,8 @@ enum {
 #define kSettingMonitorLvl "InputMonitorLevel"    /* "half" | "full": level used when on */
 #define kSettingInput      "InputSource"          /* "line" | "mic" | "frontmic" */
 #define kInputNameKey      "InputSourceName"      /* read-only: selected input's name */
+#define kSettingOutput     "OutputDestination"    /* "headphones" | "line" | "frontpanel" */
+#define kOutputNameKey     "OutputDestinationName" /* read-only: selected output's name */
 #define kSettingFilter     "DACFilter"            /* "sharp" | "slow" */
 #define kSettingDeemphasis "Deemphasis"           /* boolean */
 #define kSettingSPDIF      "SPDIFOutput"          /* boolean: S/PDIF mirrors the analog out */
@@ -115,7 +117,8 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
      * (Info.plist); the same keys can be changed later through setProperties. */
     OSDictionary *defaults = OSDictionary::withCapacity(4);
     if (defaults) {
-        static const char *const keys[] = { kSettingImpedance, kSettingInput, kSettingMonitorLvl,
+        static const char *const keys[] = { kSettingImpedance, kSettingOutput, kSettingInput,
+                                            kSettingMonitorLvl,
                                             kSettingMonitor, kSettingFilter, kSettingDeemphasis,
                                             kSettingSPDIF };
         for (const char *key : keys) {
@@ -183,7 +186,7 @@ bool CMI8788AudioDevice::createAudioEngine()
                            kIOAudioOutputPortSubTypeHeadphones);
         selector->setValueChangeHandler(outputChangeHandler, this);
         engine->addDefaultAudioControl(selector);
-        selector->release();
+        outputSelector_ = selector;     /* keep our reference to sync it */
     }
 
     {
@@ -231,7 +234,7 @@ bool CMI8788AudioDevice::createAudioEngine()
     volume_[0] = volume_[1] = kInitialVolume;
     setInputSource(kSelectLineIn, NULL);
     chip_.setMicGain(kInitialMicGain);
-    chip_.setOutput(CMI8788Chip::kOutputHeadphones);
+    setOutputDestination(kSelectHeadphones, NULL);
     chip_.setVolume(volume_[0], volume_[1]);
     chip_.setMute(false);
 
@@ -258,6 +261,7 @@ void CMI8788AudioDevice::free()
     OSSafeReleaseNULL(passThruMute_);
     OSSafeReleaseNULL(passThruLevel_);
     OSSafeReleaseNULL(inputSelector_);
+    OSSafeReleaseNULL(outputSelector_);
     OSSafeReleaseNULL(engine_);
     if (chipAttached_) {
         chip_.detach();
@@ -312,6 +316,17 @@ IOReturn CMI8788AudioDevice::applySettings(OSDictionary *settings)
         setProperty(kSettingImpedance, value, 32);
         LOG("headphone impedance %u ohms -> gain offset %d.%d dB", value, offset / 2,
             (offset % 2) ? 5 : 0);
+        result = kIOReturnSuccess;
+    }
+    if (OSString *output = OSDynamicCast(OSString, settings->getObject(kSettingOutput))) {
+        if (output->isEqualTo("headphones"))
+            setOutputDestination(kSelectHeadphones, NULL);
+        else if (output->isEqualTo("line"))
+            setOutputDestination(kSelectSpeakers, NULL);
+        else if (output->isEqualTo("frontpanel"))
+            setOutputDestination(kSelectFrontPanel, NULL);
+        else
+            return kIOReturnBadArgument;
         result = kIOReturnSuccess;
     }
     if (OSString *input = OSDynamicCast(OSString, settings->getObject(kSettingInput))) {
@@ -419,19 +434,9 @@ IOReturn CMI8788AudioDevice::outputChangeHandler(OSObject *target, IOAudioContro
     CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
     if (!device)
         return kIOReturnBadArgument;
-    switch (newValue) {
-    case kSelectSpeakers:
-        device->chip_.setOutput(CMI8788Chip::kOutputSpeakers);
-        break;
-    case kSelectHeadphones:
-        device->chip_.setOutput(CMI8788Chip::kOutputHeadphones);
-        break;
-    case kSelectFrontPanel:
-        device->chip_.setOutput(CMI8788Chip::kOutputFrontPanel);
-        break;
-    default:
+    if (newValue != kSelectSpeakers && newValue != kSelectHeadphones && newValue != kSelectFrontPanel)
         return kIOReturnBadArgument;
-    }
+    device->setOutputDestination(newValue, control);
     return kIOReturnSuccess;
 }
 
@@ -519,4 +524,25 @@ IOReturn CMI8788AudioDevice::passThruLevelHandler(OSObject *target, IOAudioContr
         return kIOReturnBadArgument;
     device->setMonitor(device->monitorOn_, newValue == 1, control);
     return kIOReturnSuccess;
+}
+
+/* Select the output from any source (Sound preferences via the selector
+ * control, the STX app / stxctl via setProperties), keeping the published
+ * properties and CoreAudio's selector in step. */
+void CMI8788AudioDevice::setOutputDestination(SInt32 selection, IOAudioControl *changedControl)
+{
+    chip_.setOutput(selection == kSelectSpeakers ? CMI8788Chip::kOutputSpeakers
+                    : selection == kSelectFrontPanel ? CMI8788Chip::kOutputFrontPanel
+                    : CMI8788Chip::kOutputHeadphones);
+    setProperty(kSettingOutput, selection == kSelectSpeakers ? "line"
+                                : selection == kSelectFrontPanel ? "frontpanel" : "headphones");
+    setProperty(kOutputNameKey, selection == kSelectSpeakers ? "Line Out"
+                                : selection == kSelectFrontPanel ? "Front Panel Headphones"
+                                : "Headphones");
+    OSNumber *n;
+    if (outputSelector_ && changedControl != outputSelector_ &&
+        (n = OSNumber::withNumber((UInt32)selection, 32))) {
+        outputSelector_->hardwareValueChanged(n);
+        n->release();
+    }
 }

@@ -141,7 +141,9 @@ Microphone / Front Panel Microphone) are chosen in Sound preferences.
 The card settings below have no place in Sound preferences. The easiest way to
 set them is the **STX menu bar app**, which saves your choices and reapplies
 them whenever the card appears (at login, after wake, after a driver reload).
-Its Input submenu and "Monitor Input" item sit together: monitoring plays
+Its Output and Input submenus mirror Sound preferences (and stay in sync with
+it), and remember your choice across reloads and reboots. The Input submenu and
+"Monitor Input" item sit together: monitoring plays
 whichever input is selected, and the menu bar shows "STX ●" while it's on.
 Changes made elsewhere (Sound preferences, `stxctl`, other apps) are saved as
 your new choice too.
@@ -152,6 +154,7 @@ your new choice too.
 | Key | Type | Effect |
 |---|---|---|
 | `HeadphoneImpedance` | Number | Your headphones' impedance in ohms (the Linux "Headphones Impedance" / Windows "HP Amp Gain" setting). Picks the headphone gain offset like the Linux driver: < 32 Ω −18 dB, 32–63 Ω −12 dB, 64–299 Ω −6 dB, 300 Ω and up 0 dB. Without it: −18 dB, the safe default. |
+| `OutputDestination` | String | `headphones`, `line` or `frontpanel`: the selected output, same as choosing it in Sound preferences (which stays in sync). |
 | `InputSource` | String | `line`, `mic` or `frontmic`: the selected input, same as choosing it in Sound preferences (which stays in sync). |
 | `InputMonitor` | String | `off`, `half` (−6 dB) or `full` (0 dB): play the line/mic input straight to the outputs, in hardware. Also available to other apps as CoreAudio play-through (`kAudioDevicePropertyPlayThru`). |
 | `InputMonitorLevel` | String | `half` or `full`: the level monitoring uses when switched on; kept while it's off. |
@@ -166,6 +169,7 @@ changes them immediately (the STX app, if running, then saves them):
 ```sh
 stxctl status
 stxctl impedance 300
+stxctl output headphones|line|frontpanel
 stxctl input line|mic|frontmic
 stxctl monitor off|half|full
 stxctl filter sharp|slow
