@@ -4,11 +4,13 @@
 #   make remote     rsync this checkout to $(REMOTE) and build there
 #   make load       copy to /tmp, chown root:wheel, kextutil it (needs SIP off)
 #   make unload     kextunload it
+#   make dist       release zip in dist/ (kext + README + COPYING)
+#   make remote-dist build the release zip on $(REMOTE) and copy it back
 #   make clean
 
 PRODUCT   := CMI8788Driver
 BUNDLE_ID := com.lukesau.driver.$(PRODUCT)
-VERSION   := 1.0
+VERSION   := 0.1.0
 MINOS     := 10.15
 
 SRC_DIR   := CMI8788Driver
@@ -39,7 +41,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD)/obj/%.o,$(SRCS)) $(BUILD)/obj/kmod_
 REMOTE     ?= hackintosh
 REMOTE_DIR ?= CMI8788Driver
 
-.PHONY: all clean remote load unload
+.PHONY: all clean remote load unload dist remote-dist
 
 all: $(KEXT)
 
@@ -67,6 +69,7 @@ $(KEXT): $(OBJS) $(SRC_DIR)/$(PRODUCT)-Info.plist
 	sed -e 's/$${EXECUTABLE_NAME}/$(PRODUCT)/g' \
 	    -e 's/$${PRODUCT_NAME:rfc1034identifier}/$(PRODUCT)/g' \
 	    -e 's/$${PRODUCT_NAME}/$(PRODUCT)/g' \
+	    -e 's/$${MODULE_VERSION}/$(VERSION)/g' \
 	    $(SRC_DIR)/$(PRODUCT)-Info.plist > $@/Contents/Info.plist
 	plutil -lint $@/Contents/Info.plist
 
@@ -74,10 +77,27 @@ $(BUILD)/obj:
 	@mkdir -p $@
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) dist
+
+# Always a clean build from the checked-in Info.plist (no Debug key).
+DIST_ZIP := dist/$(PRODUCT)-$(VERSION).zip
+dist:
+	rm -rf $(BUILD) dist
+	$(MAKE) all
+	mkdir -p dist/$(PRODUCT)-$(VERSION)
+	cp -R $(KEXT) README.md COPYING dist/$(PRODUCT)-$(VERSION)/
+	cd dist && ditto -c -k --keepParent $(PRODUCT)-$(VERSION) $(PRODUCT)-$(VERSION).zip
+	shasum -a 256 $(DIST_ZIP)
+
+remote-dist:
+	rsync -a --delete --exclude .git --exclude hackintosh --exclude build --exclude dist ./ $(REMOTE):$(REMOTE_DIR)/
+	ssh $(REMOTE) 'cd $(REMOTE_DIR) && make dist'
+	mkdir -p dist
+	scp $(REMOTE):$(REMOTE_DIR)/$(DIST_ZIP) dist/
+	shasum -a 256 $(DIST_ZIP)
 
 remote:
-	rsync -a --delete --exclude .git --exclude hackintosh --exclude build ./ $(REMOTE):$(REMOTE_DIR)/
+	rsync -a --delete --exclude .git --exclude hackintosh --exclude build --exclude dist ./ $(REMOTE):$(REMOTE_DIR)/
 	ssh $(REMOTE) 'cd $(REMOTE_DIR) && make'
 
 load: $(KEXT)

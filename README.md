@@ -21,12 +21,16 @@ Working on hardware: plays and records on a Xonar Essence STX.
 - Headphone gain offset from the `HeadphoneImpedance` personality key (ohms),
   like the Linux "Headphones Impedance" control; without it, -18 dB (< 32 ohm)
 
-Not yet: mic input, S/PDIF, sleep/wake, the H6 daughterboard's extra channels.
+- Sleep / wake (playback resumes after wake)
+
+Not yet: mic input, S/PDIF, the H6 daughterboard's extra channels.
 
 Tested on the dev box (Catalina 10.15.7, i7-3770, original STX `1043:835c`
 behind a PEX8112): playback at 44.1-192 kHz, volume / mute / balance, switching
 between Headphones and Line Out during playback, stereo line-in capture (clean
-1 kHz tone, correct channels), and repeated load / unload with the card present.
+1 kHz tone, correct channels), sleep / wake with audio playing, and repeated
+load / unload with the card present. Untested: Front Panel output, the STX II,
+other macOS versions, and loading through OpenCore injection.
 
 ### Debugging
 
@@ -42,6 +46,70 @@ ioreg -l -r -c CMI8788AudioEngine | grep Debug
 Recording from a command-line tool over SSH returns silence on Catalina unless
 the tool has microphone permission; test capture with a normal app (QuickTime,
 Audacity) instead.
+
+## Installing
+
+Requirements: an Intel Mac or hackintosh with a Xonar Essence STX or STX II
+(PCIe; the plain Essence ST is PCI and isn't supported), with the card's
+auxiliary power connector plugged in. Developed and tested on macOS 10.15
+Catalina. Download `CMI8788Driver-<version>.zip` from the releases page.
+
+The kext is not signed, so macOS's kext signing check has to be out of the way
+one of these two ways.
+
+### Hackintosh / OpenCore Legacy Patcher Macs: inject with OpenCore
+
+1. Copy `CMI8788Driver.kext` to `EFI/OC/Kexts/`.
+2. Add an entry to `config.plist` under `Kernel` → `Add`:
+
+   | Key | Type | Value |
+   |---|---|---|
+   | Arch | String | `x86_64` |
+   | BundlePath | String | `CMI8788Driver.kext` |
+   | Comment | String | `Xonar Essence STX` |
+   | Enabled | Boolean | `true` |
+   | ExecutablePath | String | `Contents/MacOS/CMI8788Driver` |
+   | MaxKernel | String | (empty) |
+   | MinKernel | String | (empty) |
+   | PlistPath | String | `Contents/Info.plist` |
+
+3. Run `ocvalidate`, reboot. SIP can stay enabled.
+
+> This route is the intended one but **hasn't been verified yet**; the tested
+> path so far is the next one.
+
+### Any Intel Mac: SIP off, load from /Library/Extensions
+
+1. Disable SIP's kext signing check from Recovery: `csrutil disable` (or
+   `csrutil enable --without kext`). On a hackintosh, OpenCore's Toggle SIP
+   entry works too.
+2. Install and load:
+
+   ```sh
+   sudo cp -R CMI8788Driver.kext /Library/Extensions/
+   sudo chown -R root:wheel /Library/Extensions/CMI8788Driver.kext
+   sudo chmod -R 755 /Library/Extensions/CMI8788Driver.kext
+   sudo kextutil /Library/Extensions/CMI8788Driver.kext
+   ```
+
+   On Big Sur and later, macOS asks you to approve the extension in Security &
+   Privacy and reboot.
+
+"Xonar Essence STX" then shows up in Sound preferences. Uninstall with
+`sudo kextunload -b com.lukesau.driver.CMI8788Driver` and deleting the kext.
+
+## Configuration
+
+Set these keys in `CMI8788Driver.kext/Contents/Info.plist`, under
+`IOKitPersonalities` → `CMI8788Driver`, then reload the kext (or reboot):
+
+| Key | Type | Effect |
+|---|---|---|
+| `HeadphoneImpedance` | Number | Your headphones' impedance in ohms. Picks the headphone gain offset like the Linux driver: < 32 Ω −18 dB, 32–63 Ω −12 dB, 64–299 Ω −6 dB, 300 Ω and up 0 dB. Without it: −18 dB, the safe default. |
+| `Debug` | Boolean | Publish diagnostics to the I/O registry (see Debugging). |
+
+Output (Headphones / Line Out / Front Panel Headphones) is chosen in Sound
+preferences, as the output's data source.
 
 ## Apple Silicon
 
@@ -79,6 +147,7 @@ make            # build/CMI8788Driver.kext
 make remote     # rsync to the dev box (ssh host "hackintosh") and build there
 make load       # on the box: copy to /tmp, chown root:wheel, kextutil (SIP must be off)
 make unload
+make dist       # release zip in dist/ (version from the Makefile)
 ```
 
 ## License
