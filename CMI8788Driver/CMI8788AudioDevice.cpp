@@ -35,6 +35,7 @@ enum {
 #define kInputNameKey      "InputSourceName"      /* read-only: selected input's name */
 #define kSettingFilter     "DACFilter"            /* "sharp" | "slow" */
 #define kSettingDeemphasis "Deemphasis"           /* boolean */
+#define kSettingSPDIF      "SPDIFOutput"          /* boolean: S/PDIF mirrors the analog out */
 
 static const UInt8  kInitialVolume = CMI8788Chip::kVolumeSteps - 2 * 30;  /* -30 dB */
 static const SInt32 kInitialOutput = kSelectHeadphones;
@@ -115,7 +116,8 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
     OSDictionary *defaults = OSDictionary::withCapacity(4);
     if (defaults) {
         static const char *const keys[] = { kSettingImpedance, kSettingInput, kSettingMonitorLvl,
-                                            kSettingMonitor, kSettingFilter, kSettingDeemphasis };
+                                            kSettingMonitor, kSettingFilter, kSettingDeemphasis,
+                                            kSettingSPDIF };
         for (const char *key : keys) {
             OSObject *value = getProperty(key);
             if (value)
@@ -127,6 +129,8 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
             setProperty(kSettingFilter, "sharp");
         if (!defaults->getObject(kSettingDeemphasis))
             setProperty(kSettingDeemphasis, false);
+        if (!defaults->getObject(kSettingSPDIF))
+            setProperty(kSettingSPDIF, false);
         applySettings(defaults);
         defaults->release();
     }
@@ -343,6 +347,11 @@ IOReturn CMI8788AudioDevice::applySettings(OSDictionary *settings)
             return kIOReturnBadArgument;
         chip_.setDACFilterSlow(filter->isEqualTo("slow"));
         setProperty(kSettingFilter, filter);
+        result = kIOReturnSuccess;
+    }
+    if (OSBoolean *spdif = OSDynamicCast(OSBoolean, settings->getObject(kSettingSPDIF))) {
+        chip_.setSPDIFOutput(spdif->isTrue());
+        setProperty(kSettingSPDIF, spdif);
         result = kIOReturnSuccess;
     }
     if (OSBoolean *deemph = OSDynamicCast(OSBoolean, settings->getObject(kSettingDeemphasis))) {

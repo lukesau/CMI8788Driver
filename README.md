@@ -21,6 +21,10 @@ Working on hardware: plays and records on a Xonar Essence STX.
 - Hardware input monitoring (line/mic in straight to the outputs, 0 or −6 dB),
   also exposed as CoreAudio's standard play-through controls; DAC filter
   roll-off (sharp/slow), de-emphasis
+- S/PDIF output (coaxial/optical jack) mirroring the analog stereo at the
+  playback rate, as Linux's "IEC958 Playback Switch". Off by default.
+  **Untested with a receiver**: the register programming was checked against
+  the Linux driver at 44.1 / 48 / 192 kHz, but nobody has listened to it yet
 - STX menu bar app for the card settings, and an installer
 - Volume (-60 to 0 dB in 0.5 dB steps, done in the DAC), mute
 - Output selection: Headphones (rear jack), Line Out, Front Panel Headphones
@@ -29,7 +33,8 @@ Working on hardware: plays and records on a Xonar Essence STX.
 
 - Sleep / wake (playback resumes after wake)
 
-Not yet: S/PDIF, the H6 daughterboard's extra channels.
+Not yet: a separate S/PDIF stream (Dolby/DTS passthrough), S/PDIF input, the H6
+daughterboard's extra channels.
 
 Tested on the dev box (Catalina 10.15.7, i7-3770, original STX `1043:835c`
 behind a PEX8112): playback at 44.1-192 kHz, volume / mute / balance, switching
@@ -152,6 +157,7 @@ your new choice too.
 | `InputMonitorLevel` | String | `half` or `full`: the level monitoring uses when switched on; kept while it's off. |
 | `DACFilter` | String | `sharp` (default) or `slow`: the PCM1792A's digital filter roll-off. |
 | `Deemphasis` | Boolean | De-emphasis for old pre-emphasized recordings. Default off. |
+| `SPDIFOutput` | Boolean | Send the same stereo as the analog outputs to the S/PDIF jack. Default off. Untested with a receiver. |
 | `Debug` | Boolean | Publish diagnostics to the I/O registry (see Debugging). Info.plist only. |
 
 `stxctl` (installed by the installer, or in the zip; not part of the kext)
@@ -164,6 +170,7 @@ stxctl input line|mic|frontmic
 stxctl monitor off|half|full
 stxctl filter sharp|slow
 stxctl deemphasis on|off
+stxctl spdif on|off
 ```
 
 ## Apple Silicon

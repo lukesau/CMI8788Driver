@@ -19,6 +19,7 @@ enum Setting: String, CaseIterable {
     case monitor = "InputMonitor"           // "off" | "half" | "full"
     case filter = "DACFilter"               // "sharp" | "slow"
     case deemphasis = "Deemphasis"          // Bool
+    case spdif = "SPDIFOutput"              // Bool: S/PDIF mirrors the analog output
 }
 
 /// One menu choice: the label, and the value sent to the driver.
@@ -242,6 +243,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.target = self
         item.state = deemph ? .on : .off
         menu.addItem(item)
+
+        let spdif = (Driver.read(.spdif) as? NSNumber)?.boolValue ?? false
+        let spdifItem = NSMenuItem(title: "S/PDIF Output", action: #selector(toggleSPDIF(_:)),
+                                   keyEquivalent: "")
+        spdifItem.target = self
+        spdifItem.state = spdif ? .on : .off
+        spdifItem.toolTip = "Send the same stereo as the analog outputs to the coaxial/optical jack."
+        menu.addItem(spdifItem)
         addFooter()
     }
 
@@ -291,6 +300,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleMonitor(_ sender: NSMenuItem) {
         let level = Driver.read(.monitorLevel) as? String ?? "half"
         choose(.monitor, sender.state == .on ? "off" : level)
+    }
+
+    @objc func toggleSPDIF(_ sender: NSMenuItem) {
+        choose(.spdif, sender.state != .on)
     }
 
     @objc func toggleDeemphasis(_ sender: NSMenuItem) {

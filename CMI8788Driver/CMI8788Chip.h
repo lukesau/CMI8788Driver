@@ -71,6 +71,7 @@ public:
     void setInputMonitor(Monitor monitor);     /* line/mic in -> outputs, in hardware */
     void setDACFilterSlow(bool slow);          /* PCM1792A sharp / slow roll-off */
     void setDeemphasis(bool on);
+    void setSPDIFOutput(bool on);              /* S/PDIF mirrors the analog stereo */
     bool hasExternalPower();
 
     /* DMA (multichannel playback, recording channel B). */
@@ -137,6 +138,7 @@ private:
     void updateDACVolume();
     void enableOutput();
     void disableOutput();
+    void updateSPDIFSource();
 
     IOPCIDevice *pci_ = nullptr;
     IOMemoryMap *map_ = nullptr;
@@ -157,6 +159,7 @@ private:
     bool hpActive_ = false;
     SInt8 hpGainOffset_ = 2 * -18;      /* Linux default: "< 32 ohms" */
     UInt32 currentRate_ = 48000;
+    bool spdifOut_ = false;
 };
 
 #endif /* CMI8788_CHIP_H */

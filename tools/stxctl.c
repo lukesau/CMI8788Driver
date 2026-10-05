@@ -12,6 +12,7 @@
  *   stxctl monitor off|half|full     hardware input monitoring (half = -6 dB)
  *   stxctl filter sharp|slow         DAC digital filter roll-off
  *   stxctl deemphasis on|off
+ *   stxctl spdif on|off              S/PDIF output mirrors the analog stereo
  */
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
@@ -27,7 +28,8 @@ static int usage(void)
             "       stxctl input line|mic|frontmic\n"
             "       stxctl monitor off|half|full\n"
             "       stxctl filter sharp|slow\n"
-            "       stxctl deemphasis on|off\n");
+            "       stxctl deemphasis on|off\n"
+            "       stxctl spdif on|off\n");
     return 2;
 }
 
@@ -85,6 +87,7 @@ int main(int argc, char **argv)
         printProperty(dev, CFSTR("InputMonitorLevel"), "monitor level");
         printProperty(dev, CFSTR("DACFilter"), "DAC filter");
         printProperty(dev, CFSTR("Deemphasis"), "de-emphasis");
+        printProperty(dev, CFSTR("SPDIFOutput"), "S/PDIF output");
         rc = 0;
     } else if (!strcmp(cmd, "impedance") && arg) {
         char *end;
@@ -106,6 +109,9 @@ int main(int argc, char **argv)
         rc = set(dev, CFSTR("DACFilter"), str(arg));
     } else if (!strcmp(cmd, "deemphasis") && arg && (!strcmp(arg, "on") || !strcmp(arg, "off"))) {
         rc = set(dev, CFSTR("Deemphasis"),
+                 CFRetain(!strcmp(arg, "on") ? kCFBooleanTrue : kCFBooleanFalse));
+    } else if (!strcmp(cmd, "spdif") && arg && (!strcmp(arg, "on") || !strcmp(arg, "off"))) {
+        rc = set(dev, CFSTR("SPDIFOutput"),
                  CFRetain(!strcmp(arg, "on") ? kCFBooleanTrue : kCFBooleanFalse));
     } else {
         rc = usage();

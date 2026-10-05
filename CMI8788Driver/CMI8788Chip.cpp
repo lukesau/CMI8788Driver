@@ -598,6 +598,64 @@ void CMI8788Chip::setInputMonitor(Monitor monitor)
     write8Masked(OXYGEN_ADC_MONITOR, bits, OXYGEN_ADC_MONITOR_B | OXYGEN_ADC_MONITOR_B_HALF_VOL);
 }
 
+/* ---- S/PDIF output (oxygen_mixer.c) ------------------------------------- */
+
+/* Consumer channel status: copyright not asserted, original, PCM coder
+ * category (oxygen_init's spdif_bits). */
+static const UInt32 kSPDIFBits = OXYGEN_SPDIF_C | OXYGEN_SPDIF_ORIGINAL |
+                                 (0x02 /* IEC958_AES1_CON_PCM_CODER */ << OXYGEN_SPDIF_CATEGORY_SHIFT);
+
+/* oxygen_spdif_rate: IEC 60958-3 sample-frequency code (channel status
+ * byte 3) for an OXYGEN_RATE_* value. */
+static UInt32 spdifRateBits(UInt16 oxygenRate)
+{
+    UInt32 code;
+    switch (oxygenRate) {
+    case OXYGEN_RATE_32000:  code = 0x3; break;
+    case OXYGEN_RATE_44100:  code = 0x0; break;
+    case OXYGEN_RATE_64000:  code = 0xb; break;
+    case OXYGEN_RATE_88200:  code = 0x8; break;
+    case OXYGEN_RATE_96000:  code = 0xa; break;
+    case OXYGEN_RATE_176400: code = 0xc; break;
+    case OXYGEN_RATE_192000: code = 0xe; break;
+    default:                 code = 0x2; break;   /* 48000 */
+    }
+    return code << OXYGEN_SPDIF_CS_RATE_SHIFT;
+}
+
+/* oxygen_update_spdif_source, mirror mode only (no separate S/PDIF PCM):
+ * with the switch on, S/PDIF carries DAC channels 0/1 at the playback rate. */
+void CMI8788Chip::updateSPDIFSource()
+{
+    UInt32 oldControl = read32(OXYGEN_SPDIF_CONTROL), newControl;
+    UInt16 oldRouting = read16(OXYGEN_PLAY_ROUTING), newRouting;
+    UInt16 rate = OXYGEN_RATE_44100;
+
+    if (spdifOut_) {
+        newRouting = (UInt16)((oldRouting & ~OXYGEN_PLAY_SPDIF_MASK) | OXYGEN_PLAY_SPDIF_MULTICH_01);
+        rate = read16(OXYGEN_I2S_MULTICH_FORMAT) & OXYGEN_I2S_RATE_MASK;
+        newControl = (oldControl & ~(UInt32)OXYGEN_SPDIF_OUT_RATE_MASK) |
+                     ((UInt32)rate << OXYGEN_SPDIF_OUT_RATE_SHIFT) | OXYGEN_SPDIF_OUT_ENABLE;
+    } else {
+        newControl = oldControl & ~(UInt32)OXYGEN_SPDIF_OUT_ENABLE;
+        newRouting = oldRouting;
+    }
+    if (oldRouting != newRouting) {
+        write32(OXYGEN_SPDIF_CONTROL, newControl & ~(UInt32)OXYGEN_SPDIF_OUT_ENABLE);
+        write16(OXYGEN_PLAY_ROUTING, newRouting);
+    }
+    if (newControl & OXYGEN_SPDIF_OUT_ENABLE)
+        write32(OXYGEN_SPDIF_OUTPUT_BITS, spdifRateBits(rate) | kSPDIFBits);
+    write32(OXYGEN_SPDIF_CONTROL, newControl);
+}
+
+/* spdif_switch_put */
+void CMI8788Chip::setSPDIFOutput(bool on)
+{
+    spdifOut_ = on;
+    updateSPDIFSource();
+}
+
 /* rolloff_put */
 void CMI8788Chip::setDACFilterSlow(bool slow)
 {
@@ -666,6 +724,9 @@ void CMI8788Chip::setPlaybackRate(UInt32 rate)
                   (2 << OXYGEN_PLAY_DAC2_SOURCE_SHIFT) | (3 << OXYGEN_PLAY_DAC3_SOURCE_SHIFT),
                   OXYGEN_PLAY_DAC0_SOURCE_MASK | OXYGEN_PLAY_DAC1_SOURCE_MASK |
                   OXYGEN_PLAY_DAC2_SOURCE_MASK | OXYGEN_PLAY_DAC3_SOURCE_MASK);
+
+    /* oxygen_multich_hw_params -> oxygen_update_spdif_source: follow the rate */
+    updateSPDIFSource();
 }
 
 /* oxygen_rec_b_hw_params + xonar_set_cs53x1_params */
