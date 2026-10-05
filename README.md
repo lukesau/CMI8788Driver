@@ -1,5 +1,7 @@
 # CMI8788Driver
 
+![The STX menu bar app (output, input, monitoring and card settings) and the Xonar Essence STX's outputs and inputs in Sound preferences](docs/banner.png)
+
 macOS (IOAudioFamily) kext for the Asus Xonar Essence STX / STX II, which are
 built on the C-Media CMI8788 ("Oxygen HD") chip. It is a port of the Linux
 `snd-virtuoso` driver; the Linux sources it follows are kept unmodified in
@@ -206,6 +208,7 @@ hackintoshes, which are supported up to macOS 26 Tahoe.
 | `app/STX/` | STX menu bar app (Swift/AppKit) |
 | `tools/stxctl.c` | Command-line settings tool |
 | `installer/` | Installer package: distribution, scripts, LaunchAgent, uninstaller |
+| `scripts/make-banner.sh` | Rebuilds `docs/banner.png` from `docs/screenshots/` (ImageMagick) |
 
 ## Building
 
