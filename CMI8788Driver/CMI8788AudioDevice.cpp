@@ -2,6 +2,7 @@
 #include <IOKit/audio/IOAudioLevelControl.h>
 #include <IOKit/audio/IOAudioSelectorControl.h>
 #include <IOKit/audio/IOAudioToggleControl.h>
+#include <IOKit/audio/IOAudioDefines.h>
 #include <IOKit/audio/IOAudioTypes.h>
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOUserClient.h>
@@ -30,6 +31,24 @@ static const SInt32 kInitialOutput = kSelectHeadphones;
 static const UInt8  kInitialMicGain = CMI8788Chip::kMicGainSteps - 8;   /* 0 dB + 20 dB boost */
 
 OSDefineMetaClassAndStructors(CMI8788AudioDevice, IOAudioDevice);
+
+/* Add a selection with an explicit port kind (CoreAudio's data source kind,
+ * what Sound preferences shows as "Type"). The selection value must be unique
+ * per selector, so this is how a second microphone or headphone jack gets a
+ * proper type. Kinds with a label: 'hdpn' Headphone port, 'lino' / 'lini'
+ * Audio line-out / line-in port, 'emic' Microphone port. */
+enum { kKindLineOut = 'lino', kKindLineIn = 'lini' };
+static void addSelectionOfKind(IOAudioSelectorControl *selector, SInt32 value,
+                               const char *description, UInt32 kind)
+{
+    OSString *desc = OSString::withCString(description);
+    OSNumber *transport = OSNumber::withNumber(kind, 32);
+    if (desc && transport)
+        selector->addAvailableSelection(value, desc, kIOAudioSelectorControlTransportValueKey,
+                                        transport);
+    OSSafeReleaseNULL(desc);
+    OSSafeReleaseNULL(transport);
+}
 
 /* "HeadphoneImpedance" (ohms) picks the st_hp_volume_offset setting, like the
  * Linux "Headphones Impedance" control or the Windows "HP Amp Gain". It comes
@@ -123,9 +142,11 @@ bool CMI8788AudioDevice::createAudioEngine()
             kInitialOutput, kIOAudioControlChannelIDAll, "All");
         if (!selector)
             goto fail;
-        selector->addAvailableSelection(kSelectHeadphones, "Headphones");
-        selector->addAvailableSelection(kSelectSpeakers, "Line Out");
-        selector->addAvailableSelection(kSelectFrontPanel, "Front Panel Headphones");
+        addSelectionOfKind(selector, kSelectHeadphones, "Headphones",
+                           kIOAudioOutputPortSubTypeHeadphones);
+        addSelectionOfKind(selector, kSelectSpeakers, "Line Out", kKindLineOut);
+        addSelectionOfKind(selector, kSelectFrontPanel, "Front Panel Headphones",
+                           kIOAudioOutputPortSubTypeHeadphones);
         selector->setValueChangeHandler(outputChangeHandler, this);
         engine->addDefaultAudioControl(selector);
         selector->release();
@@ -136,9 +157,11 @@ bool CMI8788AudioDevice::createAudioEngine()
             kSelectLineIn, kIOAudioControlChannelIDAll, "All");
         if (!selector)
             goto fail;
-        selector->addAvailableSelection(kSelectLineIn, "Line In");
-        selector->addAvailableSelection(kSelectMic, "Microphone");
-        selector->addAvailableSelection(kSelectFrontMic, "Front Panel Microphone");
+        addSelectionOfKind(selector, kSelectLineIn, "Line In", kKindLineIn);
+        addSelectionOfKind(selector, kSelectMic, "Microphone",
+                           kIOAudioInputPortSubTypeExternalMicrophone);
+        addSelectionOfKind(selector, kSelectFrontMic, "Front Panel Microphone",
+                           kIOAudioInputPortSubTypeExternalMicrophone);
         selector->setValueChangeHandler(inputChangeHandler, this);
         engine->addDefaultAudioControl(selector);
         selector->release();
