@@ -12,7 +12,6 @@ static const UInt8  kADCMclks       = OXYGEN_MCLKS(256, 128, 128);
 static const UInt16 kDACI2SFormat   = OXYGEN_I2S_FORMAT_I2S;
 static const UInt16 kADCI2SFormat   = OXYGEN_I2S_FORMAT_LJUST;
 static const UInt8  kDACVolumeMin   = 255 - 2 * 60;
-static const UInt32 kAntiPopDelayMs = 800;   /* xonar_stx_init */
 
 #define LOG(fmt, ...) IOLog("CMI8788: " fmt "\n", ##__VA_ARGS__)
 
@@ -362,7 +361,7 @@ void CMI8788Chip::initModel(UInt16 subdevice)
     setBits16(OXYGEN_GPIO_CONTROL, GPIO_CS53x1_M_MASK);
     write16Masked(OXYGEN_GPIO_DATA, GPIO_CS53x1_M_SINGLE, GPIO_CS53x1_M_MASK);
 
-    enableOutput();
+    prepareOutput();       /* the owner closes the relay after kAntiPopDelayMs */
     LOG("%s initialized", modelName_);
 }
 
@@ -435,7 +434,7 @@ void CMI8788Chip::resume()
         restoreAC97(1);
 
     pcm1796RegistersInit();
-    enableOutput();
+    prepareOutput();       /* the owner closes the relay after kAntiPopDelayMs */
 
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock_);
     write16(OXYGEN_INTERRUPT_MASK, interruptMask_);
@@ -445,11 +444,16 @@ void CMI8788Chip::resume()
     LOG("resumed");
 }
 
-/* xonar_enable_output: the delay avoids a pop when the relay closes */
-void CMI8788Chip::enableOutput()
+/* xonar_enable_output, first half: make the relay pin an output (still open).
+ * The anti-pop delay (xonar_stx_init: 800 ms) runs before finishEnableOutput. */
+void CMI8788Chip::prepareOutput()
 {
     setBits16(OXYGEN_GPIO_CONTROL, GPIO_ST_OUTPUT_ENABLE);
-    IOSleep(kAntiPopDelayMs);
+}
+
+/* xonar_enable_output, second half: close the output relay. */
+void CMI8788Chip::finishEnableOutput()
+{
     setBits16(OXYGEN_GPIO_DATA, GPIO_ST_OUTPUT_ENABLE);
 }
 

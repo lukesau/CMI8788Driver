@@ -4,10 +4,10 @@
 
 #include <IOKit/audio/IOAudioDevice.h>
 #include <IOKit/audio/IOAudioControl.h>
+#include <IOKit/IOTimerEventSource.h>
 
 #include "CMI8788Chip.h"
 
-class CMI8788AudioEngine;
 
 //! Matches the CMI8788 on a Xonar Essence STX / STX II, owns the hardware
 //! layer, and publishes one engine plus its volume / mute / output controls.
@@ -48,11 +48,11 @@ private:
     void setMonitor(bool on, bool full, IOAudioControl *changedControl);
     void setInputSource(SInt32 selection, IOAudioControl *changedControl);
     void setOutputDestination(SInt32 selection, IOAudioControl *changedControl);
+    void scheduleOutputEnable();
+    static void outputEnableTimerFired(OSObject *owner, IOTimerEventSource *timer);
 
     CMI8788Chip chip_;
     IOPCIDevice *pci_;
-    CMI8788AudioEngine *engine_;
-    bool enginePausedForSleep_;
     /* Input monitoring: on/off plus the level it uses when on (remembered
      * while off). Mirrored to CoreAudio's play-through controls. */
     bool monitorOn_;
@@ -61,6 +61,7 @@ private:
     IOAudioControl *passThruLevel_;
     IOAudioControl *inputSelector_;
     IOAudioControl *outputSelector_;
+    IOTimerEventSource *outputEnableTimer_;   /* anti-pop relay delay */
     bool chipAttached_;
     UInt8 volume_[2];
 };

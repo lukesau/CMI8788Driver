@@ -57,6 +57,12 @@ public:
     void suspend();
     void resume();
 
+    /* xonar_enable_output, split around its anti-pop delay: initModel() and
+     * resume() prepare the output; the owner waits kAntiPopDelayMs (on a
+     * timer, not blocking) and then closes the relay with finishEnableOutput(). */
+    static const UInt32 kAntiPopDelayMs = 800;
+    void finishEnableOutput();
+
     /* Runtime controls. */
     void setPlaybackRate(UInt32 rate);
     void setCaptureRate(UInt32 rate);
@@ -136,7 +142,7 @@ private:
     void pcm1796WriteCached(UInt8 reg, UInt8 value);
     void pcm1796RegistersInit();
     void updateDACVolume();
-    void enableOutput();
+    void prepareOutput();
     void disableOutput();
     void updateSPDIFSource();
 

@@ -5,6 +5,7 @@
 #include <IOKit/audio/IOAudioDefines.h>
 #include <IOKit/audio/IOAudioTypes.h>
 #include <IOKit/IOCommandGate.h>
+#include <kern/clock.h>
 
 #include "CMI8788AudioDevice.h"
 #include "CMI8788AudioEngine.h"
@@ -96,9 +97,19 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
         return false;
     }
 
+    /* The output relay closes kAntiPopDelayMs after init / wake, on this timer
+     * instead of a blocking sleep, so attach and wake aren't held up by it. */
+    outputEnableTimer_ = IOTimerEventSource::timerEventSource(this, outputEnableTimerFired);
+    if (!outputEnableTimer_ || !getWorkLoop() ||
+        getWorkLoop()->addEventSource(outputEnableTimer_) != kIOReturnSuccess) {
+        OSSafeReleaseNULL(outputEnableTimer_);
+        return false;
+    }
+
     chip_.configurePCIeBridge();
     chip_.initChip();
     chip_.initModel(subdevice);
+    scheduleOutputEnable();
     chip_.setHeadphoneGainOffset(gainOffsetForImpedance(0));
 
     setDeviceName(chip_.modelName());
@@ -106,6 +117,8 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
     setManufacturerName("ASUS");
 
     if (!createAudioEngine()) {
+        outputEnableTimer_->cancelTimeout();
+        getWorkLoop()->removeEventSource(outputEnableTimer_);
         chip_.shutdown();
         return false;
     }
@@ -240,7 +253,7 @@ bool CMI8788AudioDevice::createAudioEngine()
 
     if (activateAudioEngine(engine) != kIOReturnSuccess)
         goto fail;
-    engine_ = engine;           /* keep our reference for sleep/wake */
+    engine->release();          /* activateAudioEngine() keeps its own reference */
     return true;
 
 fail:
@@ -251,6 +264,11 @@ fail:
 
 void CMI8788AudioDevice::stop(IOService *provider)
 {
+    if (outputEnableTimer_) {
+        outputEnableTimer_->cancelTimeout();
+        if (getWorkLoop())
+            getWorkLoop()->removeEventSource(outputEnableTimer_);
+    }
     super::stop(provider);      /* stops and detaches the engine first */
     if (chipAttached_)
         chip_.shutdown();
@@ -258,11 +276,11 @@ void CMI8788AudioDevice::stop(IOService *provider)
 
 void CMI8788AudioDevice::free()
 {
+    OSSafeReleaseNULL(outputEnableTimer_);
     OSSafeReleaseNULL(passThruMute_);
     OSSafeReleaseNULL(passThruLevel_);
     OSSafeReleaseNULL(inputSelector_);
     OSSafeReleaseNULL(outputSelector_);
-    OSSafeReleaseNULL(engine_);
     if (chipAttached_) {
         chip_.detach();
         chipAttached_ = false;
@@ -274,29 +292,29 @@ void CMI8788AudioDevice::free()
 /* Idle <-> Active needs nothing: the chip stays powered while the system is
  * awake. Only system sleep loses the CMI8788's register state.
  *
- * IOAudioFamily leaves a running engine marked running across sleep, so pause
- * it here and resume it after the chip is restored (what ALSA's suspend /
- * resume of open PCM streams does on Linux). resumeAudioEngine() clears the
- * buffers and restarts the DMA through performAudioEngineStart(). */
+ * IOAudioFamily pauses running engines before calling this for sleep and
+ * resumes them after the wake call returns (protectedCompletePowerStateChange),
+ * so only the chip is handled here. The output relay closes on a timer after
+ * wake (anti-pop), so this returns in a few milliseconds. */
 IOReturn CMI8788AudioDevice::performPowerStateChange(IOAudioDevicePowerState oldPowerState,
                                                      IOAudioDevicePowerState newPowerState,
                                                      UInt32 *microsecondsUntilComplete)
 {
     if (!chipAttached_)
         return kIOReturnSuccess;
+    uint64_t start = mach_absolute_time(), ns;
     if (newPowerState == kIOAudioDeviceSleep && oldPowerState != kIOAudioDeviceSleep) {
-        if (engine_ && engine_->getState() == kIOAudioEngineRunning) {
-            engine_->pauseAudioEngine();
-            enginePausedForSleep_ = true;
-        }
+        if (outputEnableTimer_)
+            outputEnableTimer_->cancelTimeout();
         chip_.suspend();
     } else if (oldPowerState == kIOAudioDeviceSleep && newPowerState != kIOAudioDeviceSleep) {
         chip_.resume();
-        if (enginePausedForSleep_ && engine_) {
-            engine_->resumeAudioEngine();
-            enginePausedForSleep_ = false;
-        }
+        scheduleOutputEnable();
+    } else {
+        return kIOReturnSuccess;
     }
+    absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+    LOG("power state %d -> %d in %llu ms", (int)oldPowerState, (int)newPowerState, ns / 1000000);
     return kIOReturnSuccess;
 }
 
@@ -545,4 +563,18 @@ void CMI8788AudioDevice::setOutputDestination(SInt32 selection, IOAudioControl *
         outputSelector_->hardwareValueChanged(n);
         n->release();
     }
+}
+
+void CMI8788AudioDevice::scheduleOutputEnable()
+{
+    if (outputEnableTimer_)
+        outputEnableTimer_->setTimeoutMS(CMI8788Chip::kAntiPopDelayMs);
+}
+
+/* Runs on the work loop kAntiPopDelayMs after init / wake. */
+void CMI8788AudioDevice::outputEnableTimerFired(OSObject *owner, IOTimerEventSource *timer)
+{
+    CMI8788AudioDevice *device = (CMI8788AudioDevice *)owner;
+    if (device->chipAttached_)
+        device->chip_.finishEnableOutput();
 }
