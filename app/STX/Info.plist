@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>STX</string>
 	<key>CFBundleIdentifier</key>
@@ -22,6 +24,8 @@
 	<string>${MODULE_VERSION}</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>10.15</string>
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

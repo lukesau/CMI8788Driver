@@ -91,6 +91,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var matchIterator: io_iterator_t = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // One menu bar item only: the LaunchAgent and macOS's "reopen apps at
+        // login" can both start us.
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Bundle.main.bundleIdentifier ?? "com.lukesau.stx")
+            .filter { $0.processIdentifier != me }
+        if !others.isEmpty {
+            NSApp.terminate(nil)
+            return
+        }
         statusItem.button?.title = "STX"
         menu.delegate = self
         statusItem.menu = menu

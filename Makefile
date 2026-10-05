@@ -54,9 +54,10 @@ $(STXCTL): tools/stxctl.c | $(BUILD)/obj
 	    -framework IOKit -framework CoreFoundation $< -o $@
 
 # Menu bar app, built without Xcode. Ad-hoc signed.
-$(APP): app/STX/main.swift app/STX/Info.plist | $(BUILD)/obj
+$(APP): app/STX/main.swift app/STX/Info.plist app/STX/AppIcon.icns | $(BUILD)/obj
 	@rm -rf $@
-	@mkdir -p $@/Contents/MacOS
+	@mkdir -p $@/Contents/MacOS $@/Contents/Resources
+	cp app/STX/AppIcon.icns $@/Contents/Resources/
 	xcrun swiftc -O -target x86_64-apple-macos$(MINOS) -sdk $(SDK) app/STX/main.swift \
 	    -o $@/Contents/MacOS/STX
 	sed -e 's/$${MODULE_VERSION}/$(VERSION)/g' app/STX/Info.plist > $@/Contents/Info.plist
