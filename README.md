@@ -59,9 +59,19 @@ Audacity) instead.
 
 Requirements: an Intel Mac or hackintosh with a Xonar Essence STX or STX II
 (PCIe; the plain Essence ST is PCI and isn't supported), with the card's
-auxiliary power connector plugged in. Developed and tested on macOS 10.15
-Catalina. Download `CMI8788Driver-<version>.pkg` (installer) or `.zip` from the releases
-page. Neither is signed: right-click the installer and choose Open.
+auxiliary power connector plugged in. Requires macOS 10.15 Catalina or later
+(developed and tested on 10.15.7). Download `CMI8788Driver-<version>.pkg`
+(installer) or `.zip` from the releases page. Neither is signed: right-click the
+installer and choose Open.
+
+> **Older macOS:** not supported. The driver itself uses nothing newer than
+> what IOAudioFamily offered around 10.9, so a rebuild with a lower deployment
+> target (and a replacement for the IOAudioFamily float-conversion helpers)
+> would plausibly run on 10.9–10.14; the Swift STX app would additionally need
+> the Swift runtime bundled before 10.14.4. Snow Leopard–era systems (e.g.
+> 2006–2012 Mac Pros) would need a separate port: an i386 kernel slice, an
+> old Xcode toolchain, and an Objective-C app. Not planned, but contributions
+> welcome.
 
 The installer has two parts (Customize to choose):
 
