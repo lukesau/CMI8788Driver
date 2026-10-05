@@ -23,6 +23,24 @@ Written, builds cleanly, **not yet tested on hardware**.
 
 Not yet: mic input, S/PDIF, sleep/wake, the H6 daughterboard's extra channels.
 
+## Apple Silicon
+
+Not supported, and not realistically possible, even with the card in a
+Thunderbolt PCIe enclosure:
+
+- The CMI8788 exposes its registers only through an I/O-port BAR (Linux uses
+  `inb`/`outb`; there is no memory-mapped alternative). Thunderbolt-attached
+  devices generally don't get PCI I/O space, ARM has no port I/O, and Apple
+  Silicon's PCIe isn't known to provide it, so the registers would be
+  unreachable.
+- Kexts on Apple Silicon need Reduced Security and an arm64 build; the
+  supported route is a DriverKit driver (PCIDriverKit + AudioDriverKit), whose
+  register access is built around memory BARs, so it hits the same wall.
+
+The chip knowledge in `CMI8788Chip.cpp` would carry over to any future
+attempt; the IOAudioFamily code would not. This driver targets Intel Macs and
+hackintoshes, which are supported up to macOS 26 Tahoe.
+
 ## Layout
 
 | File | Role |
