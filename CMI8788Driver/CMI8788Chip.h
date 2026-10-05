@@ -27,8 +27,17 @@ public:
         kOutputFrontPanel,       /* front-panel header */
     };
 
+    enum Input {
+        kInputLine = 0,          /* rear jack, straight to the CS5381 */
+        kInputMic,               /* rear jack via the CM9780 mic preamp */
+        kInputFrontMic,          /* front-panel header via the CM9780 */
+    };
+
     /* DAC volume steps: 0.5 dB each, 0 = -60 dB, kVolumeSteps = 0 dB. */
     static const UInt8 kVolumeSteps = 120;
+    /* CM9780 mic gain steps: 1.5 dB each, 0 = -34.5 dB, 31 = +12 dB (plus the
+     * fixed +20 dB mic boost). */
+    static const UInt8 kMicGainSteps = 31;
 
     bool attach(IOPCIDevice *pci);
     void detach();
@@ -55,6 +64,8 @@ public:
     void setMute(bool mute);
     void setOutput(Output output);
     void setHeadphoneGainOffset(SInt8 halfDecibels);
+    void setInput(Input input);
+    void setMicGain(UInt8 steps);              /* 0..kMicGainSteps */
     bool hasExternalPower();
 
     /* DMA (multichannel playback, recording channel B). */

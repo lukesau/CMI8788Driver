@@ -3,6 +3,8 @@
 #include <IOKit/audio/IOAudioSelectorControl.h>
 #include <IOKit/audio/IOAudioToggleControl.h>
 #include <IOKit/audio/IOAudioTypes.h>
+#include <IOKit/IOCommandGate.h>
+#include <IOKit/IOUserClient.h>
 
 #include "CMI8788AudioDevice.h"
 #include "CMI8788AudioEngine.h"
@@ -16,19 +18,25 @@ enum {
     kSelectFrontPanel = 'fhdp',
 };
 
+/* Input selector values (shown as inputs in Sound preferences). */
+enum {
+    kSelectLineIn     = kIOAudioInputPortSubTypeLine,               /* 'line' */
+    kSelectMic        = kIOAudioInputPortSubTypeExternalMicrophone, /* 'emic' */
+    kSelectFrontMic   = 'fmic',
+};
+
 static const UInt8  kInitialVolume = CMI8788Chip::kVolumeSteps - 2 * 30;  /* -30 dB */
 static const SInt32 kInitialOutput = kSelectHeadphones;
+static const UInt8  kInitialMicGain = CMI8788Chip::kMicGainSteps - 8;   /* 0 dB + 20 dB boost */
 
 OSDefineMetaClassAndStructors(CMI8788AudioDevice, IOAudioDevice);
 
-/* Personality key "HeadphoneImpedance" (ohms) picks the st_hp_volume_offset
- * setting; without it we keep the Linux default of -18 dB (< 32 ohms). */
-SInt8 CMI8788AudioDevice::headphoneGainOffset()
+/* "HeadphoneImpedance" (ohms) picks the st_hp_volume_offset setting, like the
+ * Linux "Headphones Impedance" control or the Windows "HP Amp Gain". It comes
+ * from the personality at load, or at runtime through setProperties(). Without
+ * it we keep the Linux default of -18 dB (< 32 ohms). */
+SInt8 CMI8788AudioDevice::gainOffsetForImpedance(UInt32 value)
 {
-    OSNumber *ohms = OSDynamicCast(OSNumber, getProperty("HeadphoneImpedance"));
-    if (!ohms)
-        return 2 * -18;
-    UInt32 value = ohms->unsigned32BitValue();
     if (value < 32)
         return 2 * -18;
     if (value < 64)
@@ -59,7 +67,8 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
     chip_.configurePCIeBridge();
     chip_.initChip();
     chip_.initModel(subdevice);
-    chip_.setHeadphoneGainOffset(headphoneGainOffset());
+    OSNumber *ohms = OSDynamicCast(OSNumber, getProperty("HeadphoneImpedance"));
+    chip_.setHeadphoneGainOffset(gainOffsetForImpedance(ohms ? ohms->unsigned32BitValue() : 0));
 
     setDeviceName(chip_.modelName());
     setDeviceShortName("Xonar STX");
@@ -122,8 +131,34 @@ bool CMI8788AudioDevice::createAudioEngine()
         selector->release();
     }
 
+    {
+        IOAudioSelectorControl *selector = IOAudioSelectorControl::createInputSelector(
+            kSelectLineIn, kIOAudioControlChannelIDAll, "All");
+        if (!selector)
+            goto fail;
+        selector->addAvailableSelection(kSelectLineIn, "Line In");
+        selector->addAvailableSelection(kSelectMic, "Microphone");
+        selector->addAvailableSelection(kSelectFrontMic, "Front Panel Microphone");
+        selector->setValueChangeHandler(inputChangeHandler, this);
+        engine->addDefaultAudioControl(selector);
+        selector->release();
+    }
+
+    /* CM9780 mic gain incl. the +20 dB boost: -14.5 dB .. +32 dB. Has no
+     * effect on line-in, which bypasses the codec. */
+    control = IOAudioLevelControl::createVolumeControl(
+        kInitialMicGain, 0, CMI8788Chip::kMicGainSteps, -(29 << 15), 32 << 16,
+        kIOAudioControlChannelIDAll, "All", 0, kIOAudioControlUsageInput);
+    if (!control)
+        goto fail;
+    control->setValueChangeHandler(micGainChangeHandler, this);
+    engine->addDefaultAudioControl(control);
+    control->release();
+
     /* Controls don't call their handlers for the initial value. */
     volume_[0] = volume_[1] = kInitialVolume;
+    chip_.setInput(CMI8788Chip::kInputLine);
+    chip_.setMicGain(kInitialMicGain);
     chip_.setOutput(CMI8788Chip::kOutputHeadphones);
     chip_.setVolume(volume_[0], volume_[1]);
     chip_.setMute(false);
@@ -186,6 +221,34 @@ IOReturn CMI8788AudioDevice::performPowerStateChange(IOAudioDevicePowerState old
     return kIOReturnSuccess;
 }
 
+IOReturn CMI8788AudioDevice::applyHeadphoneOffsetAction(OSObject *owner, void *arg0,
+                                                       void *, void *, void *)
+{
+    CMI8788AudioDevice *device = (CMI8788AudioDevice *)owner;
+    device->chip_.setHeadphoneGainOffset((SInt8)(intptr_t)arg0);
+    return kIOReturnSuccess;
+}
+
+/* Runtime settings from user space (tools/stxctl), administrators only. */
+IOReturn CMI8788AudioDevice::setProperties(OSObject *properties)
+{
+    OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
+    OSNumber *ohms = dict ? OSDynamicCast(OSNumber, dict->getObject("HeadphoneImpedance")) : NULL;
+    if (!ohms)
+        return kIOReturnUnsupported;
+    if (IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator) !=
+        kIOReturnSuccess)
+        return kIOReturnNotPrivileged;
+    if (!chipAttached_ || !getCommandGate())
+        return kIOReturnNotReady;
+
+    SInt8 offset = gainOffsetForImpedance(ohms->unsigned32BitValue());
+    setProperty("HeadphoneImpedance", ohms);
+    LOG("headphone impedance %u ohms -> gain offset %d.%d dB", ohms->unsigned32BitValue(),
+        offset / 2, (offset % 2) ? 5 : 0);
+    return getCommandGate()->runAction(applyHeadphoneOffsetAction, (void *)(intptr_t)offset);
+}
+
 IOReturn CMI8788AudioDevice::volumeChangeHandler(OSObject *target, IOAudioControl *control,
                                                  SInt32 oldValue, SInt32 newValue)
 {
@@ -238,5 +301,37 @@ IOReturn CMI8788AudioDevice::outputChangeHandler(OSObject *target, IOAudioContro
     default:
         return kIOReturnBadArgument;
     }
+    return kIOReturnSuccess;
+}
+
+IOReturn CMI8788AudioDevice::inputChangeHandler(OSObject *target, IOAudioControl *control,
+                                                SInt32 oldValue, SInt32 newValue)
+{
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device)
+        return kIOReturnBadArgument;
+    switch (newValue) {
+    case kSelectLineIn:
+        device->chip_.setInput(CMI8788Chip::kInputLine);
+        break;
+    case kSelectMic:
+        device->chip_.setInput(CMI8788Chip::kInputMic);
+        break;
+    case kSelectFrontMic:
+        device->chip_.setInput(CMI8788Chip::kInputFrontMic);
+        break;
+    default:
+        return kIOReturnBadArgument;
+    }
+    return kIOReturnSuccess;
+}
+
+IOReturn CMI8788AudioDevice::micGainChangeHandler(OSObject *target, IOAudioControl *control,
+                                                  SInt32 oldValue, SInt32 newValue)
+{
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device || newValue < 0 || newValue > CMI8788Chip::kMicGainSteps)
+        return kIOReturnBadArgument;
+    device->chip_.setMicGain((UInt8)newValue);
     return kIOReturnSuccess;
 }

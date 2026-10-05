@@ -43,7 +43,13 @@ REMOTE_DIR ?= CMI8788Driver
 
 .PHONY: all clean remote load unload dist remote-dist
 
-all: $(KEXT)
+STXCTL := $(BUILD)/stxctl
+
+all: $(KEXT) $(STXCTL)
+
+$(STXCTL): tools/stxctl.c | $(BUILD)/obj
+	$(CC) -arch x86_64 -mmacosx-version-min=$(MINOS) -isysroot $(SDK) -O2 -Wall \
+	    -framework IOKit -framework CoreFoundation $< -o $@
 
 $(BUILD)/obj/%.o: $(SRC_DIR)/%.cpp $(wildcard $(SRC_DIR)/*.h) | $(BUILD)/obj
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -85,7 +91,7 @@ dist:
 	rm -rf $(BUILD) dist
 	$(MAKE) all
 	mkdir -p dist/$(PRODUCT)-$(VERSION)
-	cp -R $(KEXT) README.md COPYING dist/$(PRODUCT)-$(VERSION)/
+	cp -R $(KEXT) $(STXCTL) README.md COPYING dist/$(PRODUCT)-$(VERSION)/
 	cd dist && ditto -c -k --keepParent $(PRODUCT)-$(VERSION) $(PRODUCT)-$(VERSION).zip
 	shasum -a 256 $(DIST_ZIP)
 

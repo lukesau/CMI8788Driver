@@ -16,6 +16,8 @@ Working on hardware: plays and records on a Xonar Essence STX.
 - Stereo playback through the PCM1792A at 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz,
   24-bit samples
 - Stereo line-in capture through the CS5381 at the same rates
+- Input selection: Line In, Microphone, Front Panel Microphone (mic through the
+  CM9780 preamp with +20 dB boost and a gain slider; **mic path untested**)
 - Volume (-60 to 0 dB in 0.5 dB steps, done in the DAC), mute
 - Output selection: Headphones (rear jack), Line Out, Front Panel Headphones
 - Headphone gain offset from the `HeadphoneImpedance` personality key (ohms),
@@ -23,7 +25,7 @@ Working on hardware: plays and records on a Xonar Essence STX.
 
 - Sleep / wake (playback resumes after wake)
 
-Not yet: mic input, S/PDIF, the H6 daughterboard's extra channels.
+Not yet: S/PDIF, the H6 daughterboard's extra channels.
 
 Tested on the dev box (Catalina 10.15.7, i7-3770, original STX `1043:835c`
 behind a PEX8112): playback at 44.1-192 kHz, volume / mute / balance, switching
@@ -105,11 +107,27 @@ Set these keys in `CMI8788Driver.kext/Contents/Info.plist`, under
 
 | Key | Type | Effect |
 |---|---|---|
-| `HeadphoneImpedance` | Number | Your headphones' impedance in ohms. Picks the headphone gain offset like the Linux driver: < 32 Ω −18 dB, 32–63 Ω −12 dB, 64–299 Ω −6 dB, 300 Ω and up 0 dB. Without it: −18 dB, the safe default. |
+| `HeadphoneImpedance` | Number | Your headphones' impedance in ohms (the Linux "Headphones Impedance" / Windows "HP Amp Gain" setting). Picks the headphone gain offset like the Linux driver: < 32 Ω −18 dB, 32–63 Ω −12 dB, 64–299 Ω −6 dB, 300 Ω and up 0 dB. Without it: −18 dB, the safe default. |
 | `Debug` | Boolean | Publish diagnostics to the I/O registry (see Debugging). |
 
-Output (Headphones / Line Out / Front Panel Headphones) is chosen in Sound
-preferences, as the output's data source.
+Output (Headphones / Line Out / Front Panel Headphones) and input (Line In /
+Microphone / Front Panel Microphone) are chosen in Sound preferences.
+
+`stxctl` changes the headphone impedance at runtime, without reloading; it
+doesn't persist across reboots (use the Info.plist key for that). It's a
+separate command-line tool in the release zip (or `build/stxctl`), not part of
+the kext; install it once with:
+
+```sh
+sudo mkdir -p /usr/local/bin && sudo cp stxctl /usr/local/bin/
+```
+
+Then:
+
+```sh
+stxctl status
+sudo stxctl impedance 300
+```
 
 ## Apple Silicon
 

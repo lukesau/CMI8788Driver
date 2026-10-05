@@ -549,6 +549,43 @@ void CMI8788Chip::setHeadphoneGainOffset(SInt8 halfDecibels)
     updateDACVolume();
 }
 
+/* ---- capture source (oxygen_mixer.c ac97_switch_put, mic_fmic_source_put,
+ *      xonar_line_mic_ac97_switch) -------------------------------------- */
+
+void CMI8788Chip::setInput(Input input)
+{
+    if (!hasAC97_0_) {
+        LOG("no CM9780 codec, input stays on line-in");
+        return;
+    }
+    if (input == kInputLine) {
+        /* mic muted, line unmuted: jack -> line-in -> CS5381 directly */
+        writeAC97Masked(0, AC97_MIC, 0x8000, 0x8000);
+        writeAC97Masked(0, AC97_LINE, 0, 0x8000);
+        clearBits16(OXYGEN_GPIO_DATA, GPIO_INPUT_ROUTE);
+        writeAC97Masked(0, CM9780_GPIO_STATUS, 0, CM9780_GPO0);
+    } else {
+        /* line muted: jack -> mic-in; CM9780 output -> CS5381 */
+        writeAC97Masked(0, AC97_LINE, 0x8000, 0x8000);
+        setBits16(OXYGEN_GPIO_DATA, GPIO_INPUT_ROUTE);
+        writeAC97Masked(0, CM9780_JACK, input == kInputFrontMic ? CM9780_FMIC2MIC : 0,
+                        CM9780_FMIC2MIC);
+        /* unmute, +20 dB boost (bit 6) */
+        writeAC97Masked(0, AC97_MIC, 0x0040, 0x8040);
+        writeAC97Masked(0, CM9780_GPIO_STATUS, CM9780_GPO0, CM9780_GPO0);
+    }
+}
+
+/* ac97_volume_put on AC97_MIC: register value 0 = +12 dB, 0x1f = -34.5 dB */
+void CMI8788Chip::setMicGain(UInt8 steps)
+{
+    if (!hasAC97_0_)
+        return;
+    if (steps > kMicGainSteps)
+        steps = kMicGainSteps;
+    writeAC97Masked(0, AC97_MIC, (UInt16)(kMicGainSteps - steps), 0x001f);
+}
+
 /* ---- sample rate / format (oxygen_pcm.c) --------------------------------- */
 
 static UInt16 oxygenRate(UInt32 rate)

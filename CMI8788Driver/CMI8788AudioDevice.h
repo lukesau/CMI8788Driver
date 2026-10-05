@@ -20,13 +20,15 @@ public:
     bool initHardware(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
+    IOReturn setProperties(OSObject *properties) override;
     IOReturn performPowerStateChange(IOAudioDevicePowerState oldPowerState,
                                      IOAudioDevicePowerState newPowerState,
                                      UInt32 *microsecondsUntilComplete) override;
 
 private:
     bool createAudioEngine();
-    SInt8 headphoneGainOffset();
+    static SInt8 gainOffsetForImpedance(UInt32 ohms);
+    static IOReturn applyHeadphoneOffsetAction(OSObject *owner, void *arg0, void *, void *, void *);
 
     static IOReturn volumeChangeHandler(OSObject *target, IOAudioControl *control,
                                         SInt32 oldValue, SInt32 newValue);
@@ -34,6 +36,10 @@ private:
                                       SInt32 oldValue, SInt32 newValue);
     static IOReturn outputChangeHandler(OSObject *target, IOAudioControl *control,
                                         SInt32 oldValue, SInt32 newValue);
+    static IOReturn inputChangeHandler(OSObject *target, IOAudioControl *control,
+                                       SInt32 oldValue, SInt32 newValue);
+    static IOReturn micGainChangeHandler(OSObject *target, IOAudioControl *control,
+                                         SInt32 oldValue, SInt32 newValue);
 
     CMI8788Chip chip_;
     IOPCIDevice *pci_;
