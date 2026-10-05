@@ -5,6 +5,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODMACommand.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
+#include <IOKit/IOTimerEventSource.h>
 #include <IOKit/audio/IOAudioEngine.h>
 
 #include "CMI8788Chip.h"
@@ -49,13 +50,16 @@ private:
 
     static bool interruptFilter(OSObject *owner, IOFilterInterruptEventSource *source);
     static void interruptHandler(OSObject *owner, IOInterruptEventSource *source, int count);
+    static void debugTimerFired(OSObject *owner, IOTimerEventSource *timer);
 
     CMI8788Chip *chip_;
     IOPCIDevice *pci_;
     IOFilterInterruptEventSource *interruptSource_;
+    IOTimerEventSource *debugTimer_;
     DMABuffer output_;
     DMABuffer input_;
     volatile bool gpioChanged_;
+    volatile UInt32 convertCalls_;
 };
 
 #endif

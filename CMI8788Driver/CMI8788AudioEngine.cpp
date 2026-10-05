@@ -155,12 +155,31 @@ bool CMI8788AudioEngine::initHardware(IOService *provider)
     }
     interruptSource_->enable();
 
+    /* Diagnostics, only with "Debug" = true in the kext personality: publish
+     * DMA positions, input peak and routing registers to the I/O registry once
+     * a second (ioreg -l -r -c CMI8788AudioEngine | grep Debug). */
+    if (provider->getProperty("Debug") == kOSBooleanTrue) {
+        debugTimer_ = IOTimerEventSource::timerEventSource(this, debugTimerFired);
+        if (debugTimer_ && workLoop->addEventSource(debugTimer_) == kIOReturnSuccess)
+            debugTimer_->setTimeoutMS(1000);
+        else
+            OSSafeReleaseNULL(debugTimer_);
+        LOG("debug diagnostics enabled");
+    }
+
     LOG("output DMA at 0x%08x, input DMA at 0x%08x", output_.busAddress, input_.busAddress);
     return true;
 }
 
 void CMI8788AudioEngine::stop(IOService *provider)
 {
+    if (debugTimer_) {
+        debugTimer_->cancelTimeout();
+        IOWorkLoop *workLoop = getWorkLoop();
+        if (workLoop)
+            workLoop->removeEventSource(debugTimer_);
+        OSSafeReleaseNULL(debugTimer_);
+    }
     chip_->stopDMA(DMA_CHANNELS);
     chip_->disableInterrupts(OXYGEN_CHANNEL_MULTICH);
     if (interruptSource_) {
@@ -175,6 +194,7 @@ void CMI8788AudioEngine::stop(IOService *provider)
 
 void CMI8788AudioEngine::free()
 {
+    OSSafeReleaseNULL(debugTimer_);
     OSSafeReleaseNULL(interruptSource_);
     freeDMABuffer(output_);
     freeDMABuffer(input_);
@@ -236,6 +256,7 @@ IOReturn CMI8788AudioEngine::convertInputSamples(const void *sampleBuf, void *de
                                                  IOAudioStream *audioStream)
 {
     UInt32 first = firstSampleFrame * streamFormat->fNumChannels;
+    convertCalls_++;
     IOAF_NativeInt32ToFloat32((const SInt32 *)sampleBuf + first, (Float32 *)destBuf,
                               numSampleFrames * streamFormat->fNumChannels);
     return kIOReturnSuccess;
@@ -270,4 +291,37 @@ void CMI8788AudioEngine::interruptHandler(OSObject *owner, IOInterruptEventSourc
         LOG("external power restored");
     else
         LOG("external power cable unplugged!");
+}
+
+void CMI8788AudioEngine::debugTimerFired(OSObject *owner, IOTimerEventSource *timer)
+{
+    CMI8788AudioEngine *engine = (CMI8788AudioEngine *)owner;
+    CMI8788Chip *chip = engine->chip_;
+
+    const SInt32 *in = (const SInt32 *)engine->input_.address;
+    UInt32 peak = 0, nonzero = 0;
+    for (UInt32 i = 0; in && i < BUFFER_SIZE / BYTES_PER_SAMPLE; ++i) {
+        SInt32 v = in[i];
+        UInt32 mag = v < 0 ? (UInt32)(-(SInt64)v) : (UInt32)v;
+        if (mag > peak)
+            peak = mag;
+        if (v)
+            ++nonzero;
+    }
+    engine->setProperty("DebugInputPeak", peak, 32);
+    engine->setProperty("DebugConvertInputCalls", engine->convertCalls_, 32);
+    engine->setProperty("DebugInputNonzeroSamples", nonzero, 32);
+    engine->setProperty("DebugInputDMAOffset",
+                        chip->dmaPosition(OXYGEN_CHANNEL_B) - engine->input_.busAddress, 32);
+    engine->setProperty("DebugOutputDMAOffset",
+                        chip->dmaPosition(OXYGEN_CHANNEL_MULTICH) - engine->output_.busAddress, 32);
+    engine->setProperty("DebugDMAStatus", chip->read8(OXYGEN_DMA_STATUS), 8);
+    engine->setProperty("DebugRecRouting", chip->read8(OXYGEN_REC_ROUTING), 8);
+    engine->setProperty("DebugRecFormat", chip->read8(OXYGEN_REC_FORMAT), 8);
+    engine->setProperty("DebugI2SBFormat", chip->read16(OXYGEN_I2S_B_FORMAT), 16);
+    engine->setProperty("DebugGPIOData", chip->read16(OXYGEN_GPIO_DATA), 16);
+    engine->setProperty("DebugGPIOControl", chip->read16(OXYGEN_GPIO_CONTROL), 16);
+    engine->setProperty("DebugMisc", chip->read8(OXYGEN_MISC), 8);
+    engine->setProperty("DebugFunction", chip->read8(OXYGEN_FUNCTION), 8);
+    timer->setTimeoutMS(1000);
 }

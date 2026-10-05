@@ -11,7 +11,7 @@ Target: Intel Macs / hackintoshes, developed on macOS Catalina 10.15.
 
 ## Status
 
-Written, builds cleanly, **not yet tested on hardware**.
+Working on hardware: plays and records on a Xonar Essence STX.
 
 - Stereo playback through the PCM1792A at 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz,
   24-bit samples
@@ -22,6 +22,26 @@ Written, builds cleanly, **not yet tested on hardware**.
   like the Linux "Headphones Impedance" control; without it, -18 dB (< 32 ohm)
 
 Not yet: mic input, S/PDIF, sleep/wake, the H6 daughterboard's extra channels.
+
+Tested on the dev box (Catalina 10.15.7, i7-3770, original STX `1043:835c`
+behind a PEX8112): playback at 44.1-192 kHz, volume / mute / balance, switching
+between Headphones and Line Out during playback, stereo line-in capture (clean
+1 kHz tone, correct channels), and repeated load / unload with the card present.
+
+### Debugging
+
+Set `Debug` to true in the kext personality (`IOKitPersonalities` in
+`CMI8788Driver-Info.plist`) to have the engine publish capture/playback DMA
+positions, the input buffer peak and the routing registers to the I/O registry
+once a second:
+
+```sh
+ioreg -l -r -c CMI8788AudioEngine | grep Debug
+```
+
+Recording from a command-line tool over SSH returns silence on Catalina unless
+the tool has microphone permission; test capture with a normal app (QuickTime,
+Audacity) instead.
 
 ## Apple Silicon
 
