@@ -44,6 +44,10 @@ public:
     void initModel(UInt16 subdevice);
     void shutdown();
 
+    /* Sleep / wake (oxygen_pci_suspend / oxygen_pci_resume). */
+    void suspend();
+    void resume();
+
     /* Runtime controls. */
     void setPlaybackRate(UInt32 rate);
     void setCaptureRate(UInt32 rate);
@@ -70,9 +74,25 @@ public:
     UInt8  read8(UInt8 reg)  { return pci_->ioRead8(reg, map_); }
     UInt16 read16(UInt8 reg) { return pci_->ioRead16(reg, map_); }
     UInt32 read32(UInt8 reg) { return pci_->ioRead32(reg, map_); }
-    void write8(UInt8 reg, UInt8 value)   { pci_->ioWrite8(reg, value, map_); }
-    void write16(UInt8 reg, UInt16 value) { pci_->ioWrite16(reg, value, map_); }
-    void write32(UInt8 reg, UInt32 value) { pci_->ioWrite32(reg, value, map_); }
+    /* Writes are shadowed so resume() can restore them, like Linux's
+     * saved_registers. */
+    void write8(UInt8 reg, UInt8 value)
+    {
+        pci_->ioWrite8(reg, value, map_);
+        saved_[reg] = value;
+    }
+    void write16(UInt8 reg, UInt16 value)
+    {
+        pci_->ioWrite16(reg, value, map_);
+        saved_[reg] = (UInt8)value;
+        saved_[(UInt8)(reg + 1)] = (UInt8)(value >> 8);
+    }
+    void write32(UInt8 reg, UInt32 value)
+    {
+        pci_->ioWrite32(reg, value, map_);
+        for (unsigned i = 0; i < 4; ++i)
+            saved_[(UInt8)(reg + i)] = (UInt8)(value >> (8 * i));
+    }
     void write8Masked(UInt8 reg, UInt8 value, UInt8 mask)    { write8(reg, (read8(reg) & ~mask) | (value & mask)); }
     void write16Masked(UInt8 reg, UInt16 value, UInt16 mask) { write16(reg, (read16(reg) & ~mask) | (value & mask)); }
     void write32Masked(UInt8 reg, UInt32 value, UInt32 mask) { write32(reg, (read32(reg) & ~mask) | (value & mask)); }
@@ -89,6 +109,7 @@ private:
     void writeAC97(unsigned codec, unsigned index, UInt16 data);
     UInt16 readAC97(unsigned codec, unsigned index);
     void writeAC97Masked(unsigned codec, unsigned index, UInt16 data, UInt16 mask);
+    void restoreAC97(unsigned codec);
     UInt16 readEEPROM(unsigned index);
 
     void pcm1796Write(UInt8 reg, UInt8 value);
@@ -102,6 +123,9 @@ private:
     IOMemoryMap *map_ = nullptr;
     IOSimpleLock *lock_ = nullptr;      /* guards interruptMask_ */
     UInt16 interruptMask_ = 0;
+
+    UInt8 saved_[OXYGEN_IO_SIZE] = {};
+    UInt16 savedAC97_[2][0x40] = {};
 
     const char *modelName_ = "unknown";
     bool hasAC97_0_ = false;

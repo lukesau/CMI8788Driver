@@ -90,8 +90,10 @@ void CMI8788Chip::writeAC97(unsigned codec, unsigned index, UInt16 data)
     for (int count = 5; count > 0; --count) {
         IODelay(5);
         write32(OXYGEN_AC97_REGS, reg);
-        if (waitAC97(OXYGEN_AC97_INT_WRITE_DONE) && ++succeeded >= 2)
+        if (waitAC97(OXYGEN_AC97_INT_WRITE_DONE) && ++succeeded >= 2) {
+            savedAC97_[codec & 1][(index / 2) & 0x3f] = data;
             return;
+        }
     }
     LOG("AC'97 write timeout (codec %u, reg 0x%02x)", codec, index);
 }
@@ -375,6 +377,72 @@ void CMI8788Chip::shutdown()
     write16(OXYGEN_DMA_STATUS, 0);
     write16(OXYGEN_INTERRUPT_MASK, 0);
     IOSimpleLockUnlockEnableInterrupt(lock_, state);
+}
+
+/* ---- sleep / wake (oxygen_lib.c) ---------------------------------------- */
+
+/* Registers oxygen_pci_resume writes back from the shadow copy. */
+static const UInt32 kRegistersToRestore[OXYGEN_IO_SIZE / 32] = {
+    0xffffffff, 0x00ff077f, 0x00011d08, 0x007f00ff,
+    0x00300000, 0x00000fe4, 0x0ff7001f, 0x00000000
+};
+static const UInt32 kAC97RegistersToRestore[2][0x40 / 32] = {
+    { 0x18284fa2, 0x03060000 },
+    { 0x00007fa6, 0x00200000 }
+};
+
+static inline bool isBitSet(const UInt32 *bitmap, unsigned bit)
+{
+    return (bitmap[bit / 32] >> (bit % 32)) & 1;
+}
+
+/* oxygen_restore_ac97 */
+void CMI8788Chip::restoreAC97(unsigned codec)
+{
+    writeAC97(codec, AC97_RESET, 0);
+    IOSleep(1);
+    for (unsigned i = 1; i < 0x40; ++i)
+        if (isBitSet(kAC97RegistersToRestore[codec], i))
+            writeAC97(codec, i * 2, savedAC97_[codec][i]);
+}
+
+/* oxygen_pci_suspend + xonar_st_suspend. The engine has already been paused
+ * by IOAudioFamily; interruptMask_ is kept so resume() can restore it. */
+void CMI8788Chip::suspend()
+{
+    disableOutput();
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock_);
+    write16(OXYGEN_DMA_STATUS, 0);
+    write16(OXYGEN_INTERRUPT_MASK, 0);
+    IOSimpleLockUnlockEnableInterrupt(lock_, state);
+    LOG("suspended");
+}
+
+/* oxygen_pci_resume + xonar_stx_resume. IOAudioFamily restarts the engine
+ * afterwards through performAudioEngineStart. */
+void CMI8788Chip::resume()
+{
+    write16(OXYGEN_DMA_STATUS, 0);
+    write16(OXYGEN_INTERRUPT_MASK, 0);
+    /* the bridge's vendor registers are outside what IOPCIFamily restores */
+    configurePCIeBridge();
+    for (unsigned i = 0; i < OXYGEN_IO_SIZE; ++i)
+        if (isBitSet(kRegistersToRestore, i))
+            write8((UInt8)i, saved_[i]);
+    if (hasAC97_0_)
+        restoreAC97(0);
+    if (hasAC97_1_)
+        restoreAC97(1);
+
+    pcm1796RegistersInit();
+    enableOutput();
+
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock_);
+    write16(OXYGEN_INTERRUPT_MASK, interruptMask_);
+    IOSimpleLockUnlockEnableInterrupt(lock_, state);
+    if (!hasExternalPower())
+        LOG("WARNING: external power connector is not plugged in");
+    LOG("resumed");
 }
 
 /* xonar_enable_output: the delay avoids a pop when the relay closes */

@@ -7,7 +7,7 @@
 #   make clean
 
 PRODUCT   := CMI8788Driver
-BUNDLE_ID := com.otak.driver.$(PRODUCT)
+BUNDLE_ID := com.lukesau.driver.$(PRODUCT)
 VERSION   := 1.0
 MINOS     := 10.15
 

@@ -156,6 +156,21 @@ void CMI8788AudioDevice::free()
     super::free();
 }
 
+/* Idle <-> Active needs nothing: the chip stays powered while the system is
+ * awake. Only system sleep loses the CMI8788's register state. */
+IOReturn CMI8788AudioDevice::performPowerStateChange(IOAudioDevicePowerState oldPowerState,
+                                                     IOAudioDevicePowerState newPowerState,
+                                                     UInt32 *microsecondsUntilComplete)
+{
+    if (!chipAttached_)
+        return kIOReturnSuccess;
+    if (newPowerState == kIOAudioDeviceSleep && oldPowerState != kIOAudioDeviceSleep)
+        chip_.suspend();
+    else if (oldPowerState == kIOAudioDeviceSleep && newPowerState != kIOAudioDeviceSleep)
+        chip_.resume();
+    return kIOReturnSuccess;
+}
+
 IOReturn CMI8788AudioDevice::volumeChangeHandler(OSObject *target, IOAudioControl *control,
                                                  SInt32 oldValue, SInt32 newValue)
 {

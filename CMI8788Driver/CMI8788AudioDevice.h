@@ -18,6 +18,9 @@ public:
     bool initHardware(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
+    IOReturn performPowerStateChange(IOAudioDevicePowerState oldPowerState,
+                                     IOAudioDevicePowerState newPowerState,
+                                     UInt32 *microsecondsUntilComplete) override;
 
 private:
     bool createAudioEngine();
