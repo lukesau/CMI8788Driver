@@ -35,7 +35,7 @@ Working on hardware: plays and records on a Xonar Essence STX.
 
 - Sleep / wake (playback resumes after wake)
 
-Not yet: a separate S/PDIF stream (Dolby/DTS passthrough), S/PDIF input, the H6
+Not yet: a separate S/PDIF stream (Dolby/DTS passthrough), the H6
 daughterboard's extra channels.
 
 Tested on the dev box (Catalina 10.15.7, i7-3770, original STX `1043:835c`
