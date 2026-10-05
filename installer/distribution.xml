@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Xonar Essence STX Driver</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <license file="COPYING.txt"/>
+    <options customize="always" require-scripts="false" hostArchitectures="x86_64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="app"/>
+        <line choice="kext"/>
+    </choices-outline>
+    <choice id="app" title="STX menu bar app and tools"
+            description="The STX menu bar app (headphone impedance, input monitoring, DAC filter, de-emphasis), the stxctl command, and a copy of the kext for OpenCore in /Library/Application Support/CMI8788Driver.">
+        <pkg-ref id="com.lukesau.stx.app"/>
+    </choice>
+    <choice id="kext" title="Driver (kext) in /Library/Extensions"
+            description="Installs CMI8788Driver.kext for loading by macOS. Needs SIP's kext signing check disabled. OpenCore users: untick this and add the kext to EFI/OC/Kexts instead (the app's &quot;Show Kext for OpenCore&quot; menu item finds it).">
+        <pkg-ref id="com.lukesau.driver.CMI8788Driver"/>
+    </choice>
+    <pkg-ref id="com.lukesau.stx.app" version="0">STX-app.pkg</pkg-ref>
+    <pkg-ref id="com.lukesau.driver.CMI8788Driver" version="0">CMI8788Driver-kext.pkg</pkg-ref>
+</installer-gui-script>

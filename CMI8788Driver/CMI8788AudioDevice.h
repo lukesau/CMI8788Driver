@@ -28,7 +28,8 @@ public:
 private:
     bool createAudioEngine();
     static SInt8 gainOffsetForImpedance(UInt32 ohms);
-    static IOReturn applyHeadphoneOffsetAction(OSObject *owner, void *arg0, void *, void *, void *);
+    IOReturn applySettings(OSDictionary *settings);
+    static IOReturn applySettingsAction(OSObject *owner, void *arg0, void *, void *, void *);
 
     static IOReturn volumeChangeHandler(OSObject *target, IOAudioControl *control,
                                         SInt32 oldValue, SInt32 newValue);

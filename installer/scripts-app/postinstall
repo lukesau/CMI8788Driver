@@ -1,0 +1,12 @@
+#!/bin/sh
+# Start the STX menu bar app for the logged-in user (it also starts at login
+# through /Library/LaunchAgents/com.lukesau.stx.plist).
+chown root:wheel /Library/LaunchAgents/com.lukesau.stx.plist
+chmod 644 /Library/LaunchAgents/com.lukesau.stx.plist
+user=$(stat -f %Su /dev/console)
+if [ -n "$user" ] && [ "$user" != "root" ]; then
+    uid=$(id -u "$user")
+    launchctl bootout gui/"$uid"/com.lukesau.stx 2>/dev/null
+    launchctl bootstrap gui/"$uid" /Library/LaunchAgents/com.lukesau.stx.plist 2>/dev/null || true
+fi
+exit 0

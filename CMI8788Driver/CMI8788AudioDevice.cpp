@@ -5,7 +5,6 @@
 #include <IOKit/audio/IOAudioDefines.h>
 #include <IOKit/audio/IOAudioTypes.h>
 #include <IOKit/IOCommandGate.h>
-#include <IOKit/IOUserClient.h>
 
 #include "CMI8788AudioDevice.h"
 #include "CMI8788AudioEngine.h"
@@ -25,6 +24,14 @@ enum {
     kSelectMic        = kIOAudioInputPortSubTypeExternalMicrophone, /* 'emic' */
     kSelectFrontMic   = 'fmic',
 };
+
+/* Card settings that CoreAudio has no UI for (the STX menu bar app, stxctl).
+ * Readable from the I/O registry; writable via the personality or
+ * setProperties. */
+#define kSettingImpedance  "HeadphoneImpedance"   /* number, ohms */
+#define kSettingMonitor    "InputMonitor"         /* "off" | "half" | "full" */
+#define kSettingFilter     "DACFilter"            /* "sharp" | "slow" */
+#define kSettingDeemphasis "Deemphasis"           /* boolean */
 
 static const UInt8  kInitialVolume = CMI8788Chip::kVolumeSteps - 2 * 30;  /* -30 dB */
 static const SInt32 kInitialOutput = kSelectHeadphones;
@@ -86,8 +93,7 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
     chip_.configurePCIeBridge();
     chip_.initChip();
     chip_.initModel(subdevice);
-    OSNumber *ohms = OSDynamicCast(OSNumber, getProperty("HeadphoneImpedance"));
-    chip_.setHeadphoneGainOffset(gainOffsetForImpedance(ohms ? ohms->unsigned32BitValue() : 0));
+    chip_.setHeadphoneGainOffset(gainOffsetForImpedance(0));
 
     setDeviceName(chip_.modelName());
     setDeviceShortName("Xonar STX");
@@ -100,6 +106,27 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
 
     /* the engine's interrupt handler exists now: watch the power connector */
     chip_.enableInterrupts(OXYGEN_INT_GPIO);
+
+    /* Boot-time defaults for the card settings come from the personality
+     * (Info.plist); the same keys can be changed later through setProperties. */
+    OSDictionary *defaults = OSDictionary::withCapacity(4);
+    if (defaults) {
+        static const char *const keys[] = { kSettingImpedance, kSettingMonitor, kSettingFilter,
+                                            kSettingDeemphasis };
+        for (const char *key : keys) {
+            OSObject *value = getProperty(key);
+            if (value)
+                defaults->setObject(key, value);
+        }
+        if (!defaults->getObject(kSettingMonitor))
+            setProperty(kSettingMonitor, "off");
+        if (!defaults->getObject(kSettingFilter))
+            setProperty(kSettingFilter, "sharp");
+        if (!defaults->getObject(kSettingDeemphasis))
+            setProperty(kSettingDeemphasis, false);
+        applySettings(defaults);
+        defaults->release();
+    }
     return true;
 }
 
@@ -244,32 +271,69 @@ IOReturn CMI8788AudioDevice::performPowerStateChange(IOAudioDevicePowerState old
     return kIOReturnSuccess;
 }
 
-IOReturn CMI8788AudioDevice::applyHeadphoneOffsetAction(OSObject *owner, void *arg0,
-                                                       void *, void *, void *)
+/* Apply any recognized settings in the dictionary and publish their
+ * normalized values. Runs on the work loop (or before the device is
+ * published). Unknown keys are ignored; an invalid value fails the call. */
+IOReturn CMI8788AudioDevice::applySettings(OSDictionary *settings)
 {
-    CMI8788AudioDevice *device = (CMI8788AudioDevice *)owner;
-    device->chip_.setHeadphoneGainOffset((SInt8)(intptr_t)arg0);
-    return kIOReturnSuccess;
+    IOReturn result = kIOReturnUnsupported;
+
+    if (OSNumber *ohms = OSDynamicCast(OSNumber, settings->getObject(kSettingImpedance))) {
+        UInt32 value = ohms->unsigned32BitValue();
+        if (value == 0 || value > 100000)
+            return kIOReturnBadArgument;
+        SInt8 offset = gainOffsetForImpedance(value);
+        chip_.setHeadphoneGainOffset(offset);
+        setProperty(kSettingImpedance, value, 32);
+        LOG("headphone impedance %u ohms -> gain offset %d.%d dB", value, offset / 2,
+            (offset % 2) ? 5 : 0);
+        result = kIOReturnSuccess;
+    }
+    if (OSString *mode = OSDynamicCast(OSString, settings->getObject(kSettingMonitor))) {
+        CMI8788Chip::Monitor monitor;
+        if (mode->isEqualTo("off"))
+            monitor = CMI8788Chip::kMonitorOff;
+        else if (mode->isEqualTo("half"))
+            monitor = CMI8788Chip::kMonitorHalf;
+        else if (mode->isEqualTo("full"))
+            monitor = CMI8788Chip::kMonitorFull;
+        else
+            return kIOReturnBadArgument;
+        chip_.setInputMonitor(monitor);
+        setProperty(kSettingMonitor, mode);
+        result = kIOReturnSuccess;
+    }
+    if (OSString *filter = OSDynamicCast(OSString, settings->getObject(kSettingFilter))) {
+        if (!filter->isEqualTo("sharp") && !filter->isEqualTo("slow"))
+            return kIOReturnBadArgument;
+        chip_.setDACFilterSlow(filter->isEqualTo("slow"));
+        setProperty(kSettingFilter, filter);
+        result = kIOReturnSuccess;
+    }
+    if (OSBoolean *deemph = OSDynamicCast(OSBoolean, settings->getObject(kSettingDeemphasis))) {
+        chip_.setDeemphasis(deemph->isTrue());
+        setProperty(kSettingDeemphasis, deemph);
+        result = kIOReturnSuccess;
+    }
+    return result;
 }
 
-/* Runtime settings from user space (tools/stxctl), administrators only. */
+IOReturn CMI8788AudioDevice::applySettingsAction(OSObject *owner, void *arg0, void *, void *, void *)
+{
+    return ((CMI8788AudioDevice *)owner)->applySettings((OSDictionary *)arg0);
+}
+
+/* Runtime settings from user space (the STX app, stxctl). Like the Linux and
+ * Windows mixers, any local user may change these; the loudest result is the
+ * 0 dB headphone offset, which the volume slider can reach anyway. */
 IOReturn CMI8788AudioDevice::setProperties(OSObject *properties)
 {
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
-    OSNumber *ohms = dict ? OSDynamicCast(OSNumber, dict->getObject("HeadphoneImpedance")) : NULL;
-    if (!ohms)
-        return kIOReturnUnsupported;
-    if (IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator) !=
-        kIOReturnSuccess)
-        return kIOReturnNotPrivileged;
+    if (!dict)
+        return kIOReturnBadArgument;
     if (!chipAttached_ || !getCommandGate())
         return kIOReturnNotReady;
-
-    SInt8 offset = gainOffsetForImpedance(ohms->unsigned32BitValue());
-    setProperty("HeadphoneImpedance", ohms);
-    LOG("headphone impedance %u ohms -> gain offset %d.%d dB", ohms->unsigned32BitValue(),
-        offset / 2, (offset % 2) ? 5 : 0);
-    return getCommandGate()->runAction(applyHeadphoneOffsetAction, (void *)(intptr_t)offset);
+    return getCommandGate()->runAction(applySettingsAction, dict);
 }
 
 IOReturn CMI8788AudioDevice::volumeChangeHandler(OSObject *target, IOAudioControl *control,

@@ -4,8 +4,9 @@
 #   make remote     rsync this checkout to $(REMOTE) and build there
 #   make load       copy to /tmp, chown root:wheel, kextutil it (needs SIP off)
 #   make unload     kextunload it
-#   make dist       release zip in dist/ (kext + README + COPYING)
-#   make remote-dist build the release zip on $(REMOTE) and copy it back
+#   make pkg        installer package (STX app + tools, kext) in dist/
+#   make dist       release zip and installer in dist/
+#   make remote-dist build both on $(REMOTE) and copy them back
 #   make clean
 
 PRODUCT   := CMI8788Driver
@@ -41,15 +42,26 @@ OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD)/obj/%.o,$(SRCS)) $(BUILD)/obj/kmod_
 REMOTE     ?= hackintosh
 REMOTE_DIR ?= CMI8788Driver
 
-.PHONY: all clean remote load unload dist remote-dist
+.PHONY: all clean remote load unload pkg dist remote-dist
 
 STXCTL := $(BUILD)/stxctl
+APP    := $(BUILD)/STX.app
 
-all: $(KEXT) $(STXCTL)
+all: $(KEXT) $(STXCTL) $(APP)
 
 $(STXCTL): tools/stxctl.c | $(BUILD)/obj
 	$(CC) -arch x86_64 -mmacosx-version-min=$(MINOS) -isysroot $(SDK) -O2 -Wall \
 	    -framework IOKit -framework CoreFoundation $< -o $@
+
+# Menu bar app, built without Xcode. Ad-hoc signed.
+$(APP): app/STX/main.swift app/STX/Info.plist | $(BUILD)/obj
+	@rm -rf $@
+	@mkdir -p $@/Contents/MacOS
+	xcrun swiftc -O -target x86_64-apple-macos$(MINOS) -sdk $(SDK) app/STX/main.swift \
+	    -o $@/Contents/MacOS/STX
+	sed -e 's/$${MODULE_VERSION}/$(VERSION)/g' app/STX/Info.plist > $@/Contents/Info.plist
+	plutil -lint $@/Contents/Info.plist
+	codesign -s - -f $@
 
 $(BUILD)/obj/%.o: $(SRC_DIR)/%.cpp $(wildcard $(SRC_DIR)/*.h) | $(BUILD)/obj
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -85,22 +97,55 @@ $(BUILD)/obj:
 clean:
 	rm -rf $(BUILD) dist
 
+# Installer: two component packages (app + tools, kext) under one product with
+# a choice per component; see installer/distribution.xml.
+PKG       := dist/$(PRODUCT)-$(VERSION).pkg
+PKGBUILD  := $(BUILD)/pkg
+APP_ROOT  := $(PKGBUILD)/app-root
+KEXT_ROOT := $(PKGBUILD)/kext-root
+SUPPORT   := $(APP_ROOT)/Library/Application Support/$(PRODUCT)
+
+pkg: all
+	rm -rf $(PKGBUILD)
+	mkdir -p $(APP_ROOT)/Applications $(APP_ROOT)/Library/LaunchAgents $(APP_ROOT)/usr/local/bin \
+	         "$(SUPPORT)" $(KEXT_ROOT)/Library/Extensions $(PKGBUILD)/resources dist
+	cp -R $(APP) $(APP_ROOT)/Applications/
+	cp installer/com.lukesau.stx.plist $(APP_ROOT)/Library/LaunchAgents/
+	cp $(STXCTL) $(APP_ROOT)/usr/local/bin/
+	cp -R $(KEXT) installer/uninstall.sh "$(SUPPORT)/"
+	cp -R $(KEXT) $(KEXT_ROOT)/Library/Extensions/
+	for c in app kext; do \
+	    pkgbuild --analyze --root $(PKGBUILD)/$$c-root $(PKGBUILD)/$$c.plist >/dev/null && \
+	    n=$$(plutil -convert json -o - $(PKGBUILD)/$$c.plist | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))') && \
+	    i=0; while [ $$i -lt $$n ]; do \
+	        plutil -replace $$i.BundleIsRelocatable -bool NO $(PKGBUILD)/$$c.plist; i=$$((i+1)); done; \
+	done
+	pkgbuild --root $(APP_ROOT) --component-plist $(PKGBUILD)/app.plist --scripts installer/scripts-app \
+	    --identifier com.lukesau.stx.app --version $(VERSION) --install-location / $(PKGBUILD)/STX-app.pkg
+	pkgbuild --root $(KEXT_ROOT) --component-plist $(PKGBUILD)/kext.plist --scripts installer/scripts-kext \
+	    --identifier $(BUNDLE_ID) --version $(VERSION) --install-location / $(PKGBUILD)/$(PRODUCT)-kext.pkg
+	cp installer/resources/* $(PKGBUILD)/resources/
+	cp COPYING $(PKGBUILD)/resources/COPYING.txt
+	productbuild --distribution installer/distribution.xml --resources $(PKGBUILD)/resources \
+	    --package-path $(PKGBUILD) --version $(VERSION) $(PKG)
+
 # Always a clean build from the checked-in Info.plist (no Debug key).
 DIST_ZIP := dist/$(PRODUCT)-$(VERSION).zip
 dist:
 	rm -rf $(BUILD) dist
 	$(MAKE) all
 	mkdir -p dist/$(PRODUCT)-$(VERSION)
-	cp -R $(KEXT) $(STXCTL) README.md COPYING dist/$(PRODUCT)-$(VERSION)/
+	cp -R $(KEXT) $(STXCTL) $(APP) installer/uninstall.sh README.md COPYING dist/$(PRODUCT)-$(VERSION)/
 	cd dist && ditto -c -k --keepParent $(PRODUCT)-$(VERSION) $(PRODUCT)-$(VERSION).zip
-	shasum -a 256 $(DIST_ZIP)
+	$(MAKE) pkg
+	shasum -a 256 $(DIST_ZIP) $(PKG)
 
 remote-dist:
 	rsync -a --delete --exclude .git --exclude hackintosh --exclude build --exclude dist ./ $(REMOTE):$(REMOTE_DIR)/
 	ssh $(REMOTE) 'cd $(REMOTE_DIR) && make dist'
 	mkdir -p dist
-	scp $(REMOTE):$(REMOTE_DIR)/$(DIST_ZIP) dist/
-	shasum -a 256 $(DIST_ZIP)
+	scp $(REMOTE):$(REMOTE_DIR)/$(DIST_ZIP) $(REMOTE):$(REMOTE_DIR)/$(PKG) dist/
+	shasum -a 256 $(DIST_ZIP) $(PKG)
 
 remote:
 	rsync -a --delete --exclude .git --exclude hackintosh --exclude build --exclude dist ./ $(REMOTE):$(REMOTE_DIR)/

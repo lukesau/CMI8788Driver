@@ -17,7 +17,10 @@ Working on hardware: plays and records on a Xonar Essence STX.
   24-bit samples
 - Stereo line-in capture through the CS5381 at the same rates
 - Input selection: Line In, Microphone, Front Panel Microphone (mic through the
-  CM9780 preamp with +20 dB boost and a gain slider; **mic path untested**)
+  CM9780 preamp with +20 dB boost and a gain slider)
+- Hardware input monitoring (line/mic in straight to the outputs, 0 or −6 dB),
+  DAC filter roll-off (sharp/slow), de-emphasis
+- STX menu bar app for the card settings, and an installer
 - Volume (-60 to 0 dB in 0.5 dB steps, done in the DAC), mute
 - Output selection: Headphones (rear jack), Line Out, Front Panel Headphones
 - Headphone gain offset from the `HeadphoneImpedance` personality key (ohms),
@@ -30,8 +33,9 @@ Not yet: S/PDIF, the H6 daughterboard's extra channels.
 Tested on the dev box (Catalina 10.15.7, i7-3770, original STX `1043:835c`
 behind a PEX8112): playback at 44.1-192 kHz, volume / mute / balance, switching
 between Headphones and Line Out during playback, stereo line-in capture (clean
-1 kHz tone, correct channels), sleep / wake with audio playing, and repeated
-load / unload with the card present. Untested: Front Panel output, the STX II,
+1 kHz tone, correct channels), sleep / wake with audio playing, a ModMic on the
+mic input with hardware monitoring, the STX app and installer, and repeated
+load / unload with the card present. Untested: front-panel jacks, the STX II,
 other macOS versions, and loading through OpenCore injection.
 
 ### Debugging
@@ -54,14 +58,25 @@ Audacity) instead.
 Requirements: an Intel Mac or hackintosh with a Xonar Essence STX or STX II
 (PCIe; the plain Essence ST is PCI and isn't supported), with the card's
 auxiliary power connector plugged in. Developed and tested on macOS 10.15
-Catalina. Download `CMI8788Driver-<version>.zip` from the releases page.
+Catalina. Download `CMI8788Driver-<version>.pkg` (installer) or `.zip` from the releases
+page. Neither is signed: right-click the installer and choose Open.
+
+The installer has two parts (Customize to choose):
+
+- **STX menu bar app and tools**: `STX.app` (starts at login), `stxctl`, and a
+  copy of the kext plus `uninstall.sh` in `/Library/Application Support/CMI8788Driver/`.
+- **Driver (kext) in /Library/Extensions**: the SIP-off route below. OpenCore
+  users untick this and inject the kext instead.
+
+To uninstall: `sudo sh "/Library/Application Support/CMI8788Driver/uninstall.sh"`.
 
 The kext is not signed, so macOS's kext signing check has to be out of the way
 one of these two ways.
 
 ### Hackintosh / OpenCore Legacy Patcher Macs: inject with OpenCore
 
-1. Copy `CMI8788Driver.kext` to `EFI/OC/Kexts/`.
+1. Copy `CMI8788Driver.kext` to `EFI/OC/Kexts/` (with the installer, the STX
+   menu's "Show Kext for OpenCore…" finds it).
 2. Add an entry to `config.plist` under `Kernel` → `Add`:
 
    | Key | Type | Value |
@@ -102,31 +117,33 @@ one of these two ways.
 
 ## Configuration
 
-Set these keys in `CMI8788Driver.kext/Contents/Info.plist`, under
-`IOKitPersonalities` → `CMI8788Driver`, then reload the kext (or reboot):
+Output (Headphones / Line Out / Front Panel Headphones) and input (Line In /
+Microphone / Front Panel Microphone) are chosen in Sound preferences.
+
+The card settings below have no place in Sound preferences. The easiest way to
+set them is the **STX menu bar app**, which saves your choices and reapplies
+them whenever the card appears (at login, after wake, after a driver reload).
+`stxctl` sets them from the command line, and the same keys in
+`CMI8788Driver.kext/Contents/Info.plist` (under `IOKitPersonalities` →
+`CMI8788Driver`) set boot-time defaults:
 
 | Key | Type | Effect |
 |---|---|---|
 | `HeadphoneImpedance` | Number | Your headphones' impedance in ohms (the Linux "Headphones Impedance" / Windows "HP Amp Gain" setting). Picks the headphone gain offset like the Linux driver: < 32 Ω −18 dB, 32–63 Ω −12 dB, 64–299 Ω −6 dB, 300 Ω and up 0 dB. Without it: −18 dB, the safe default. |
-| `Debug` | Boolean | Publish diagnostics to the I/O registry (see Debugging). |
+| `InputMonitor` | String | `off`, `half` (−6 dB) or `full` (0 dB): play the line/mic input straight to the outputs, in hardware. |
+| `DACFilter` | String | `sharp` (default) or `slow`: the PCM1792A's digital filter roll-off. |
+| `Deemphasis` | Boolean | De-emphasis for old pre-emphasized recordings. Default off. |
+| `Debug` | Boolean | Publish diagnostics to the I/O registry (see Debugging). Info.plist only. |
 
-Output (Headphones / Line Out / Front Panel Headphones) and input (Line In /
-Microphone / Front Panel Microphone) are chosen in Sound preferences.
-
-`stxctl` changes the headphone impedance at runtime, without reloading; it
-doesn't persist across reboots (use the Info.plist key for that). It's a
-separate command-line tool in the release zip (or `build/stxctl`), not part of
-the kext; install it once with:
-
-```sh
-sudo mkdir -p /usr/local/bin && sudo cp stxctl /usr/local/bin/
-```
-
-Then:
+`stxctl` (installed by the installer, or in the zip; not part of the kext)
+changes them immediately but doesn't save them:
 
 ```sh
 stxctl status
-sudo stxctl impedance 300
+stxctl impedance 300
+stxctl monitor off|half|full
+stxctl filter sharp|slow
+stxctl deemphasis on|off
 ```
 
 ## Apple Silicon
@@ -154,7 +171,10 @@ hackintoshes, which are supported up to macOS 26 Tahoe.
 | `CMI8788Driver/OxygenRegs.h` | Register map, generated from the Linux headers |
 | `CMI8788Driver/CMI8788Chip.*` | Hardware layer: register/I2C/AC'97 access, chip and STX init, rates, DMA, interrupts |
 | `CMI8788Driver/CMI8788AudioEngine.*` | IOAudioEngine: DMA buffers, timestamps, format changes, sample conversion |
-| `CMI8788Driver/CMI8788AudioDevice.*` | IOAudioDevice: matching, bring-up, volume / mute / output controls |
+| `CMI8788Driver/CMI8788AudioDevice.*` | IOAudioDevice: matching, bring-up, controls, card settings, sleep/wake |
+| `app/STX/` | STX menu bar app (Swift/AppKit) |
+| `tools/stxctl.c` | Command-line settings tool |
+| `installer/` | Installer package: distribution, scripts, LaunchAgent, uninstaller |
 
 ## Building
 
@@ -165,7 +185,8 @@ make            # build/CMI8788Driver.kext
 make remote     # rsync to the dev box (ssh host "hackintosh") and build there
 make load       # on the box: copy to /tmp, chown root:wheel, kextutil (SIP must be off)
 make unload
-make dist       # release zip in dist/ (version from the Makefile)
+make pkg        # installer in dist/
+make dist       # release zip and installer in dist/ (version from the Makefile)
 ```
 
 ## License

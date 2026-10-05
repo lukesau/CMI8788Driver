@@ -1,0 +1,14 @@
+#!/bin/sh
+# Driver installed to /Library/Extensions (the SIP-off route). Refresh the kext
+# cache so it loads at boot; try loading it now as well.
+K=/Library/Extensions/CMI8788Driver.kext
+chown -R root:wheel "$K"
+chmod -R 755 "$K"
+touch /Library/Extensions
+if [ -x /usr/bin/kmutil ] && [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 11 ]; then
+    kmutil install --update-all >/dev/null 2>&1 || true   # Big Sur+: approval + reboot
+else
+    kextcache -i / >/dev/null 2>&1 || true
+    kextutil -q "$K" >/dev/null 2>&1 || true              # loads now if SIP allows it
+fi
+exit 0

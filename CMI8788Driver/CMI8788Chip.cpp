@@ -586,6 +586,32 @@ void CMI8788Chip::setMicGain(UInt8 steps)
     writeAC97Masked(0, AC97_MIC, (UInt16)(kMicGainSteps - steps), 0x001f);
 }
 
+/* monitor_put with OXYGEN_ADC_MONITOR_B (the STX records from I2S ADC 2): the
+ * ADC is mixed into the DAC path in hardware, at 0 dB or (HALF_VOL) -6 dB. */
+void CMI8788Chip::setInputMonitor(Monitor monitor)
+{
+    UInt8 bits = 0;
+    if (monitor == kMonitorHalf)
+        bits = OXYGEN_ADC_MONITOR_B | OXYGEN_ADC_MONITOR_B_HALF_VOL;
+    else if (monitor == kMonitorFull)
+        bits = OXYGEN_ADC_MONITOR_B;
+    write8Masked(OXYGEN_ADC_MONITOR, bits, OXYGEN_ADC_MONITOR_B | OXYGEN_ADC_MONITOR_B_HALF_VOL);
+}
+
+/* rolloff_put */
+void CMI8788Chip::setDACFilterSlow(bool slow)
+{
+    UInt8 reg = pcm1796Regs_[19 - PCM1796_REG_BASE] & ~PCM1796_FLT_MASK;
+    pcm1796WriteCached(19, reg | (slow ? PCM1796_FLT_SLOW : PCM1796_FLT_SHARP));
+}
+
+/* deemph_put; the de-emphasis frequency follows the sample rate (DMF) */
+void CMI8788Chip::setDeemphasis(bool on)
+{
+    UInt8 reg = pcm1796Regs_[18 - PCM1796_REG_BASE];
+    pcm1796WriteCached(18, on ? (reg | PCM1796_DME) : (reg & ~PCM1796_DME));
+}
+
 /* ---- sample rate / format (oxygen_pcm.c) --------------------------------- */
 
 static UInt16 oxygenRate(UInt32 rate)

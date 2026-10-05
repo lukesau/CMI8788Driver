@@ -66,6 +66,11 @@ public:
     void setHeadphoneGainOffset(SInt8 halfDecibels);
     void setInput(Input input);
     void setMicGain(UInt8 steps);              /* 0..kMicGainSteps */
+
+    enum Monitor { kMonitorOff = 0, kMonitorHalf, kMonitorFull };
+    void setInputMonitor(Monitor monitor);     /* line/mic in -> outputs, in hardware */
+    void setDACFilterSlow(bool slow);          /* PCM1792A sharp / slow roll-off */
+    void setDeemphasis(bool on);
     bool hasExternalPower();
 
     /* DMA (multichannel playback, recording channel B). */
