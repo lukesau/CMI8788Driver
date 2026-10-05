@@ -36,7 +36,8 @@ between Headphones and Line Out during playback, stereo line-in capture (clean
 1 kHz tone, correct channels), sleep / wake with audio playing, a ModMic on the
 mic input with hardware monitoring, the STX app and installer, and repeated
 load / unload with the card present. Untested: front-panel jacks, the STX II,
-other macOS versions, and loading through OpenCore injection.
+other macOS versions, and the installer's kext component. Loading through
+OpenCore injection is how the dev box runs it.
 
 ### Debugging
 
@@ -92,8 +93,9 @@ one of these two ways.
 
 3. Run `ocvalidate`, reboot. SIP can stay enabled.
 
-> This route is the intended one but **hasn't been verified yet**; the tested
-> path so far is the next one.
+Card settings can go in the injected kext's `Info.plist` as boot defaults (see
+Configuration), e.g. `HeadphoneImpedance`; the STX app overrides them after
+login with whatever you chose last.
 
 ### Any Intel Mac: SIP off, load from /Library/Extensions
 
