@@ -60,6 +60,8 @@ private:
     DMABuffer input_;
     volatile bool gpioChanged_;
     volatile UInt32 convertCalls_;
+    volatile UInt32 filterCalls_;
+    volatile UInt32 bufferWraps_;
 };
 
 #endif

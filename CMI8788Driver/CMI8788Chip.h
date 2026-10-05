@@ -70,6 +70,9 @@ public:
     void enableInterrupts(UInt16 mask);
     void disableInterrupts(UInt16 mask);
 
+    /* Diagnostics: the shadow of every register written so far. */
+    const UInt8 *shadowRegisters() const { return saved_; }
+
     /* Register access (oxygen_io.c). */
     UInt8  read8(UInt8 reg)  { return pci_->ioRead8(reg, map_); }
     UInt16 read16(UInt8 reg) { return pci_->ioRead16(reg, map_); }

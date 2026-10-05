@@ -7,6 +7,8 @@
 
 #include "CMI8788Chip.h"
 
+class CMI8788AudioEngine;
+
 //! Matches the CMI8788 on a Xonar Essence STX / STX II, owns the hardware
 //! layer, and publishes one engine plus its volume / mute / output controls.
 class CMI8788AudioDevice : public IOAudioDevice
@@ -35,6 +37,8 @@ private:
 
     CMI8788Chip chip_;
     IOPCIDevice *pci_;
+    CMI8788AudioEngine *engine_;
+    bool enginePausedForSleep_;
     bool chipAttached_;
     UInt8 volume_[2];
 };

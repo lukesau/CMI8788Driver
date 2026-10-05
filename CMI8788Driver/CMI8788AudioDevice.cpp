@@ -130,7 +130,7 @@ bool CMI8788AudioDevice::createAudioEngine()
 
     if (activateAudioEngine(engine) != kIOReturnSuccess)
         goto fail;
-    engine->release();
+    engine_ = engine;           /* keep our reference for sleep/wake */
     return true;
 
 fail:
@@ -148,6 +148,7 @@ void CMI8788AudioDevice::stop(IOService *provider)
 
 void CMI8788AudioDevice::free()
 {
+    OSSafeReleaseNULL(engine_);
     if (chipAttached_) {
         chip_.detach();
         chipAttached_ = false;
@@ -157,17 +158,31 @@ void CMI8788AudioDevice::free()
 }
 
 /* Idle <-> Active needs nothing: the chip stays powered while the system is
- * awake. Only system sleep loses the CMI8788's register state. */
+ * awake. Only system sleep loses the CMI8788's register state.
+ *
+ * IOAudioFamily leaves a running engine marked running across sleep, so pause
+ * it here and resume it after the chip is restored (what ALSA's suspend /
+ * resume of open PCM streams does on Linux). resumeAudioEngine() clears the
+ * buffers and restarts the DMA through performAudioEngineStart(). */
 IOReturn CMI8788AudioDevice::performPowerStateChange(IOAudioDevicePowerState oldPowerState,
                                                      IOAudioDevicePowerState newPowerState,
                                                      UInt32 *microsecondsUntilComplete)
 {
     if (!chipAttached_)
         return kIOReturnSuccess;
-    if (newPowerState == kIOAudioDeviceSleep && oldPowerState != kIOAudioDeviceSleep)
+    if (newPowerState == kIOAudioDeviceSleep && oldPowerState != kIOAudioDeviceSleep) {
+        if (engine_ && engine_->getState() == kIOAudioEngineRunning) {
+            engine_->pauseAudioEngine();
+            enginePausedForSleep_ = true;
+        }
         chip_.suspend();
-    else if (oldPowerState == kIOAudioDeviceSleep && newPowerState != kIOAudioDeviceSleep)
+    } else if (oldPowerState == kIOAudioDeviceSleep && newPowerState != kIOAudioDeviceSleep) {
         chip_.resume();
+        if (enginePausedForSleep_ && engine_) {
+            engine_->resumeAudioEngine();
+            enginePausedForSleep_ = false;
+        }
+    }
     return kIOReturnSuccess;
 }
 

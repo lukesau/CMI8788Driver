@@ -266,13 +266,16 @@ IOReturn CMI8788AudioEngine::convertInputSamples(const void *sampleBuf, void *de
 bool CMI8788AudioEngine::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *source)
 {
     CMI8788AudioEngine *engine = (CMI8788AudioEngine *)owner;
+    engine->filterCalls_++;
     UInt16 status = engine->chip_->interruptStatus();
     if (status == 0 || status == 0xffff)
         return false;
     engine->chip_->ackInterrupts(status);
 
-    if (status & OXYGEN_CHANNEL_MULTICH)
+    if (status & OXYGEN_CHANNEL_MULTICH) {
+        engine->bufferWraps_++;
         engine->takeTimeStamp();
+    }
     if (status & OXYGEN_INT_GPIO) {
         engine->gpioChanged_ = true;
         return true;    /* handle on the work loop */
@@ -310,6 +313,10 @@ void CMI8788AudioEngine::debugTimerFired(OSObject *owner, IOTimerEventSource *ti
     }
     engine->setProperty("DebugInputPeak", peak, 32);
     engine->setProperty("DebugConvertInputCalls", engine->convertCalls_, 32);
+    engine->setProperty("DebugInterruptFilterCalls", engine->filterCalls_, 32);
+    engine->setProperty("DebugBufferWrapInterrupts", engine->bufferWraps_, 32);
+    engine->setProperty("DebugInterruptStatus", chip->interruptStatus(), 16);
+    engine->setProperty("DebugInterruptMask", chip->read16(OXYGEN_INTERRUPT_MASK), 16);
     engine->setProperty("DebugInputNonzeroSamples", nonzero, 32);
     engine->setProperty("DebugInputDMAOffset",
                         chip->dmaPosition(OXYGEN_CHANNEL_B) - engine->input_.busAddress, 32);
@@ -323,5 +330,25 @@ void CMI8788AudioEngine::debugTimerFired(OSObject *owner, IOTimerEventSource *ti
     engine->setProperty("DebugGPIOControl", chip->read16(OXYGEN_GPIO_CONTROL), 16);
     engine->setProperty("DebugMisc", chip->read8(OXYGEN_MISC), 8);
     engine->setProperty("DebugFunction", chip->read8(OXYGEN_FUNCTION), 8);
+
+    /* Full register file as read now, and the driver's shadow of its writes.
+     * Skip registers whose reads have side effects: the MPU-401 data port and
+     * the AC'97 interrupt status (read-to-clear). */
+    UInt8 regs[OXYGEN_IO_SIZE];
+    for (unsigned i = 0; i < OXYGEN_IO_SIZE; ++i) {
+        bool sideEffect = i == OXYGEN_MPU401 || i == OXYGEN_MPU401 + 1 ||
+                          i == OXYGEN_AC97_INTERRUPT_STATUS;
+        regs[i] = sideEffect ? 0 : chip->read8((UInt8)i);
+    }
+    OSData *data = OSData::withBytes(regs, sizeof(regs));
+    if (data) {
+        engine->setProperty("DebugRegisters", data);
+        data->release();
+    }
+    data = OSData::withBytes(chip->shadowRegisters(), OXYGEN_IO_SIZE);
+    if (data) {
+        engine->setProperty("DebugShadowRegisters", data);
+        data->release();
+    }
     timer->setTimeoutMS(1000);
 }
