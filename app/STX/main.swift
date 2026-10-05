@@ -14,6 +14,8 @@ let kextSupportPath = "/Library/Application Support/CMI8788Driver/CMI8788Driver.
 
 enum Setting: String, CaseIterable {
     case impedance = "HeadphoneImpedance"   // NSNumber, ohms
+    case input = "InputSource"              // "line" | "mic" | "frontmic"
+    case monitorLevel = "InputMonitorLevel" // "half" | "full": level used when on
     case monitor = "InputMonitor"           // "off" | "half" | "full"
     case filter = "DACFilter"               // "sharp" | "slow"
     case deemphasis = "Deemphasis"          // Bool
@@ -32,10 +34,14 @@ let impedanceChoices = [
     Choice(title: "64–300 Ω (−6 dB)", value: 64),
     Choice(title: "300–600 Ω (0 dB)", value: 300),
 ]
-let monitorChoices = [
-    Choice(title: "Off", value: "off"),
-    Choice(title: "On, −6 dB", value: "half"),
-    Choice(title: "On, 0 dB", value: "full"),
+let inputChoices = [
+    Choice(title: "Line In", value: "line"),
+    Choice(title: "Microphone", value: "mic"),
+    Choice(title: "Front Panel Microphone", value: "frontmic"),
+]
+let monitorLevelChoices = [
+    Choice(title: "−6 dB", value: "half"),
+    Choice(title: "0 dB", value: "full"),
 ]
 let filterChoices = [
     Choice(title: "Sharp Roll-off", value: "sharp"),
@@ -89,6 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     var notifyPort: IONotificationPortRef?
     var matchIterator: io_iterator_t = 0
+    /// When the saved settings were last pushed to the driver. Changes made
+    /// elsewhere are only adopted once the device has settled after that, so
+    /// a freshly loaded driver's defaults never overwrite your choices.
+    var lastApplied = Date.distantPast
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // One menu bar item only: the LaunchAgent and macOS's "reopen apps at
@@ -101,17 +111,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSApp.terminate(nil)
             return
         }
-        statusItem.button?.title = "STX"
         menu.delegate = self
         statusItem.menu = menu
         watchForCard()
         applySaved()
+        updateTitle()
+        // Monitoring can also be switched by stxctl or another app (CoreAudio
+        // play-through), so keep the indicator current.
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.adoptOutsideChanges()
+            self?.updateTitle()
+        }
+    }
+
+    /// "STX ●" while input monitoring is on, so it's never on unnoticed.
+    func updateTitle() {
+        let monitoring = (Driver.read(.monitor) as? String).map { $0 != "off" } ?? false
+        statusItem.button?.title = monitoring ? "STX ●" : "STX"
     }
 
     // MARK: persistence
 
+    /// Save settings changed outside the app (Sound preferences, stxctl, other
+    /// apps' play-through) as the new choices, once the device has settled.
+    func adoptOutsideChanges() {
+        guard Date().timeIntervalSince(lastApplied) > 5, Driver.service() != 0 else { return }
+        for setting in Setting.allCases {
+            guard let current = Driver.read(setting) else { continue }
+            let saved = UserDefaults.standard.object(forKey: setting.rawValue)
+            if !(saved as AnyObject).isEqual(current) {
+                UserDefaults.standard.set(current, forKey: setting.rawValue)
+            }
+        }
+    }
+
     /// Push every saved choice to the driver (no-op if the card is absent).
     func applySaved() {
+        lastApplied = Date()
         var settings: [String: Any] = [:]
         for setting in Setting.allCases {
             if let value = UserDefaults.standard.object(forKey: setting.rawValue) {
@@ -124,9 +160,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func choose(_ setting: Setting, _ value: Any) {
         if Driver.write([setting.rawValue: value]) {
             UserDefaults.standard.set(value, forKey: setting.rawValue)
+            // the driver normalizes related keys (monitor on/level): save those too
+            for related in [Setting.monitor, .monitorLevel] where related != setting {
+                if let current = Driver.read(related) {
+                    UserDefaults.standard.set(current, forKey: related.rawValue)
+                }
+            }
         } else {
             NSSound.beep()
         }
+        updateTitle()
     }
 
     /// Reapply the saved settings whenever the driver publishes a device:
@@ -174,10 +217,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(disabled(Driver.modelName))
         menu.addItem(.separator())
 
+        let input = Driver.read(.input) as? String ?? "line"
+        addSubmenu("Input", .input, inputChoices) { $0 as? String == input }
+        let monitor = Driver.read(.monitor) as? String ?? "off"
+        let source = Driver.property("InputSourceName") as? String ?? "Line In"
+        let toggle = NSMenuItem(title: "Monitor Input (\(source))",
+                                action: #selector(toggleMonitor(_:)), keyEquivalent: "")
+        toggle.target = self
+        toggle.state = monitor != "off" ? .on : .off
+        toggle.toolTip = "Play the input straight to the outputs, in hardware (no latency)."
+        menu.addItem(toggle)
+        let level = Driver.read(.monitorLevel) as? String ?? "half"
+        addSubmenu("Monitoring Level", .monitorLevel, monitorLevelChoices) { $0 as? String == level }
+        menu.addItem(.separator())
+
         let ohms = (Driver.read(.impedance) as? NSNumber).map { impedanceBand($0.intValue) }
         addSubmenu("Headphone Impedance", .impedance, impedanceChoices) { $0 as? Int == ohms }
-        let monitor = Driver.read(.monitor) as? String ?? "off"
-        addSubmenu("Input Monitoring", .monitor, monitorChoices) { $0 as? String == monitor }
         let filter = Driver.read(.filter) as? String ?? "sharp"
         addSubmenu("DAC Filter", .filter, filterChoices) { $0 as? String == filter }
 
@@ -231,6 +286,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let pair = sender.representedObject as? [Any], pair.count == 2,
               let key = pair[0] as? String, let setting = Setting(rawValue: key) else { return }
         choose(setting, pair[1])
+    }
+
+    @objc func toggleMonitor(_ sender: NSMenuItem) {
+        let level = Driver.read(.monitorLevel) as? String ?? "half"
+        choose(.monitor, sender.state == .on ? "off" : level)
     }
 
     @objc func toggleDeemphasis(_ sender: NSMenuItem) {

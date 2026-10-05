@@ -41,11 +41,24 @@ private:
                                        SInt32 oldValue, SInt32 newValue);
     static IOReturn micGainChangeHandler(OSObject *target, IOAudioControl *control,
                                          SInt32 oldValue, SInt32 newValue);
+    static IOReturn passThruMuteHandler(OSObject *target, IOAudioControl *control,
+                                        SInt32 oldValue, SInt32 newValue);
+    static IOReturn passThruLevelHandler(OSObject *target, IOAudioControl *control,
+                                         SInt32 oldValue, SInt32 newValue);
+    void setMonitor(bool on, bool full, IOAudioControl *changedControl);
+    void setInputSource(SInt32 selection, IOAudioControl *changedControl);
 
     CMI8788Chip chip_;
     IOPCIDevice *pci_;
     CMI8788AudioEngine *engine_;
     bool enginePausedForSleep_;
+    /* Input monitoring: on/off plus the level it uses when on (remembered
+     * while off). Mirrored to CoreAudio's play-through controls. */
+    bool monitorOn_;
+    bool monitorFull_;
+    IOAudioControl *passThruMute_;
+    IOAudioControl *passThruLevel_;
+    IOAudioControl *inputSelector_;
     bool chipAttached_;
     UInt8 volume_[2];
 };

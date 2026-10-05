@@ -19,7 +19,8 @@ Working on hardware: plays and records on a Xonar Essence STX.
 - Input selection: Line In, Microphone, Front Panel Microphone (mic through the
   CM9780 preamp with +20 dB boost and a gain slider)
 - Hardware input monitoring (line/mic in straight to the outputs, 0 or −6 dB),
-  DAC filter roll-off (sharp/slow), de-emphasis
+  also exposed as CoreAudio's standard play-through controls; DAC filter
+  roll-off (sharp/slow), de-emphasis
 - STX menu bar app for the card settings, and an installer
 - Volume (-60 to 0 dB in 0.5 dB steps, done in the DAC), mute
 - Output selection: Headphones (rear jack), Line Out, Front Panel Headphones
@@ -125,6 +126,10 @@ Microphone / Front Panel Microphone) are chosen in Sound preferences.
 The card settings below have no place in Sound preferences. The easiest way to
 set them is the **STX menu bar app**, which saves your choices and reapplies
 them whenever the card appears (at login, after wake, after a driver reload).
+Its Input submenu and "Monitor Input" item sit together: monitoring plays
+whichever input is selected, and the menu bar shows "STX ●" while it's on.
+Changes made elsewhere (Sound preferences, `stxctl`, other apps) are saved as
+your new choice too.
 `stxctl` sets them from the command line, and the same keys in
 `CMI8788Driver.kext/Contents/Info.plist` (under `IOKitPersonalities` →
 `CMI8788Driver`) set boot-time defaults:
@@ -132,17 +137,20 @@ them whenever the card appears (at login, after wake, after a driver reload).
 | Key | Type | Effect |
 |---|---|---|
 | `HeadphoneImpedance` | Number | Your headphones' impedance in ohms (the Linux "Headphones Impedance" / Windows "HP Amp Gain" setting). Picks the headphone gain offset like the Linux driver: < 32 Ω −18 dB, 32–63 Ω −12 dB, 64–299 Ω −6 dB, 300 Ω and up 0 dB. Without it: −18 dB, the safe default. |
-| `InputMonitor` | String | `off`, `half` (−6 dB) or `full` (0 dB): play the line/mic input straight to the outputs, in hardware. |
+| `InputSource` | String | `line`, `mic` or `frontmic`: the selected input, same as choosing it in Sound preferences (which stays in sync). |
+| `InputMonitor` | String | `off`, `half` (−6 dB) or `full` (0 dB): play the line/mic input straight to the outputs, in hardware. Also available to other apps as CoreAudio play-through (`kAudioDevicePropertyPlayThru`). |
+| `InputMonitorLevel` | String | `half` or `full`: the level monitoring uses when switched on; kept while it's off. |
 | `DACFilter` | String | `sharp` (default) or `slow`: the PCM1792A's digital filter roll-off. |
 | `Deemphasis` | Boolean | De-emphasis for old pre-emphasized recordings. Default off. |
 | `Debug` | Boolean | Publish diagnostics to the I/O registry (see Debugging). Info.plist only. |
 
 `stxctl` (installed by the installer, or in the zip; not part of the kext)
-changes them immediately but doesn't save them:
+changes them immediately (the STX app, if running, then saves them):
 
 ```sh
 stxctl status
 stxctl impedance 300
+stxctl input line|mic|frontmic
 stxctl monitor off|half|full
 stxctl filter sharp|slow
 stxctl deemphasis on|off

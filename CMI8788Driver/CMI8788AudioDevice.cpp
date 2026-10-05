@@ -30,6 +30,9 @@ enum {
  * setProperties. */
 #define kSettingImpedance  "HeadphoneImpedance"   /* number, ohms */
 #define kSettingMonitor    "InputMonitor"         /* "off" | "half" | "full" */
+#define kSettingMonitorLvl "InputMonitorLevel"    /* "half" | "full": level used when on */
+#define kSettingInput      "InputSource"          /* "line" | "mic" | "frontmic" */
+#define kInputNameKey      "InputSourceName"      /* read-only: selected input's name */
 #define kSettingFilter     "DACFilter"            /* "sharp" | "slow" */
 #define kSettingDeemphasis "Deemphasis"           /* boolean */
 
@@ -111,15 +114,15 @@ bool CMI8788AudioDevice::initHardware(IOService *provider)
      * (Info.plist); the same keys can be changed later through setProperties. */
     OSDictionary *defaults = OSDictionary::withCapacity(4);
     if (defaults) {
-        static const char *const keys[] = { kSettingImpedance, kSettingMonitor, kSettingFilter,
-                                            kSettingDeemphasis };
+        static const char *const keys[] = { kSettingImpedance, kSettingInput, kSettingMonitorLvl,
+                                            kSettingMonitor, kSettingFilter, kSettingDeemphasis };
         for (const char *key : keys) {
             OSObject *value = getProperty(key);
             if (value)
                 defaults->setObject(key, value);
         }
         if (!defaults->getObject(kSettingMonitor))
-            setProperty(kSettingMonitor, "off");
+            setMonitor(false, false, NULL);
         if (!defaults->getObject(kSettingFilter))
             setProperty(kSettingFilter, "sharp");
         if (!defaults->getObject(kSettingDeemphasis))
@@ -191,7 +194,7 @@ bool CMI8788AudioDevice::createAudioEngine()
                            kIOAudioInputPortSubTypeExternalMicrophone);
         selector->setValueChangeHandler(inputChangeHandler, this);
         engine->addDefaultAudioControl(selector);
-        selector->release();
+        inputSelector_ = selector;      /* keep our reference to sync it */
     }
 
     /* CM9780 mic gain incl. the +20 dB boost: -14.5 dB .. +32 dB. Has no
@@ -205,9 +208,24 @@ bool CMI8788AudioDevice::createAudioEngine()
     engine->addDefaultAudioControl(control);
     control->release();
 
+    /* Hardware input monitoring as CoreAudio's standard play-through controls
+     * (mute on = monitoring off; level 0 = -6 dB, 1 = 0 dB). */
+    passThruMute_ = IOAudioToggleControl::createPassThruMuteControl(
+        true, kIOAudioControlChannelIDAll, "All", 0);
+    if (!passThruMute_)
+        goto fail;
+    passThruMute_->setValueChangeHandler(passThruMuteHandler, this);
+    engine->addDefaultAudioControl(passThruMute_);
+    passThruLevel_ = IOAudioLevelControl::createPassThruVolumeControl(
+        0, 0, 1, -(6 << 16), 0, kIOAudioControlChannelIDAll, "All", 0);
+    if (!passThruLevel_)
+        goto fail;
+    passThruLevel_->setValueChangeHandler(passThruLevelHandler, this);
+    engine->addDefaultAudioControl(passThruLevel_);
+
     /* Controls don't call their handlers for the initial value. */
     volume_[0] = volume_[1] = kInitialVolume;
-    chip_.setInput(CMI8788Chip::kInputLine);
+    setInputSource(kSelectLineIn, NULL);
     chip_.setMicGain(kInitialMicGain);
     chip_.setOutput(CMI8788Chip::kOutputHeadphones);
     chip_.setVolume(volume_[0], volume_[1]);
@@ -233,6 +251,9 @@ void CMI8788AudioDevice::stop(IOService *provider)
 
 void CMI8788AudioDevice::free()
 {
+    OSSafeReleaseNULL(passThruMute_);
+    OSSafeReleaseNULL(passThruLevel_);
+    OSSafeReleaseNULL(inputSelector_);
     OSSafeReleaseNULL(engine_);
     if (chipAttached_) {
         chip_.detach();
@@ -289,18 +310,32 @@ IOReturn CMI8788AudioDevice::applySettings(OSDictionary *settings)
             (offset % 2) ? 5 : 0);
         result = kIOReturnSuccess;
     }
-    if (OSString *mode = OSDynamicCast(OSString, settings->getObject(kSettingMonitor))) {
-        CMI8788Chip::Monitor monitor;
-        if (mode->isEqualTo("off"))
-            monitor = CMI8788Chip::kMonitorOff;
-        else if (mode->isEqualTo("half"))
-            monitor = CMI8788Chip::kMonitorHalf;
-        else if (mode->isEqualTo("full"))
-            monitor = CMI8788Chip::kMonitorFull;
+    if (OSString *input = OSDynamicCast(OSString, settings->getObject(kSettingInput))) {
+        if (input->isEqualTo("line"))
+            setInputSource(kSelectLineIn, NULL);
+        else if (input->isEqualTo("mic"))
+            setInputSource(kSelectMic, NULL);
+        else if (input->isEqualTo("frontmic"))
+            setInputSource(kSelectFrontMic, NULL);
         else
             return kIOReturnBadArgument;
-        chip_.setInputMonitor(monitor);
-        setProperty(kSettingMonitor, mode);
+        result = kIOReturnSuccess;
+    }
+    if (OSString *level = OSDynamicCast(OSString, settings->getObject(kSettingMonitorLvl))) {
+        if (!level->isEqualTo("half") && !level->isEqualTo("full"))
+            return kIOReturnBadArgument;
+        setMonitor(monitorOn_, level->isEqualTo("full"), NULL);
+        result = kIOReturnSuccess;
+    }
+    if (OSString *mode = OSDynamicCast(OSString, settings->getObject(kSettingMonitor))) {
+        if (mode->isEqualTo("off"))
+            setMonitor(false, monitorFull_, NULL);
+        else if (mode->isEqualTo("half"))
+            setMonitor(true, false, NULL);
+        else if (mode->isEqualTo("full"))
+            setMonitor(true, true, NULL);
+        else
+            return kIOReturnBadArgument;
         result = kIOReturnSuccess;
     }
     if (OSString *filter = OSDynamicCast(OSString, settings->getObject(kSettingFilter))) {
@@ -397,19 +432,9 @@ IOReturn CMI8788AudioDevice::inputChangeHandler(OSObject *target, IOAudioControl
     CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
     if (!device)
         return kIOReturnBadArgument;
-    switch (newValue) {
-    case kSelectLineIn:
-        device->chip_.setInput(CMI8788Chip::kInputLine);
-        break;
-    case kSelectMic:
-        device->chip_.setInput(CMI8788Chip::kInputMic);
-        break;
-    case kSelectFrontMic:
-        device->chip_.setInput(CMI8788Chip::kInputFrontMic);
-        break;
-    default:
+    if (newValue != kSelectLineIn && newValue != kSelectMic && newValue != kSelectFrontMic)
         return kIOReturnBadArgument;
-    }
+    device->setInputSource(newValue, control);
     return kIOReturnSuccess;
 }
 
@@ -420,5 +445,69 @@ IOReturn CMI8788AudioDevice::micGainChangeHandler(OSObject *target, IOAudioContr
     if (!device || newValue < 0 || newValue > CMI8788Chip::kMicGainSteps)
         return kIOReturnBadArgument;
     device->chip_.setMicGain((UInt8)newValue);
+    return kIOReturnSuccess;
+}
+
+/* Apply a monitoring state from any source and keep the published properties
+ * and CoreAudio's play-through controls in step (without re-entering the
+ * control that triggered the change). */
+void CMI8788AudioDevice::setMonitor(bool on, bool full, IOAudioControl *changedControl)
+{
+    monitorOn_ = on;
+    monitorFull_ = full;
+    chip_.setInputMonitor(!on ? CMI8788Chip::kMonitorOff
+                              : full ? CMI8788Chip::kMonitorFull : CMI8788Chip::kMonitorHalf);
+    setProperty(kSettingMonitor, !on ? "off" : full ? "full" : "half");
+    setProperty(kSettingMonitorLvl, full ? "full" : "half");
+
+    OSNumber *n;
+    if (passThruMute_ && changedControl != passThruMute_ && (n = OSNumber::withNumber(!on, 32))) {
+        passThruMute_->hardwareValueChanged(n);
+        n->release();
+    }
+    if (passThruLevel_ && changedControl != passThruLevel_ && (n = OSNumber::withNumber(full, 32))) {
+        passThruLevel_->hardwareValueChanged(n);
+        n->release();
+    }
+}
+
+/* Select the input from any source (Sound preferences via the selector
+ * control, the STX app / stxctl via setProperties) and keep the published
+ * properties and CoreAudio's selector in step. */
+void CMI8788AudioDevice::setInputSource(SInt32 selection, IOAudioControl *changedControl)
+{
+    chip_.setInput(selection == kSelectMic ? CMI8788Chip::kInputMic
+                   : selection == kSelectFrontMic ? CMI8788Chip::kInputFrontMic
+                   : CMI8788Chip::kInputLine);
+    setProperty(kSettingInput, selection == kSelectMic ? "mic"
+                               : selection == kSelectFrontMic ? "frontmic" : "line");
+    setProperty(kInputNameKey, selection == kSelectMic ? "Microphone"
+                               : selection == kSelectFrontMic ? "Front Panel Microphone"
+                               : "Line In");
+    OSNumber *n;
+    if (inputSelector_ && changedControl != inputSelector_ &&
+        (n = OSNumber::withNumber((UInt32)selection, 32))) {
+        inputSelector_->hardwareValueChanged(n);
+        n->release();
+    }
+}
+
+IOReturn CMI8788AudioDevice::passThruMuteHandler(OSObject *target, IOAudioControl *control,
+                                                 SInt32 oldValue, SInt32 newValue)
+{
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device)
+        return kIOReturnBadArgument;
+    device->setMonitor(newValue == 0, device->monitorFull_, control);
+    return kIOReturnSuccess;
+}
+
+IOReturn CMI8788AudioDevice::passThruLevelHandler(OSObject *target, IOAudioControl *control,
+                                                  SInt32 oldValue, SInt32 newValue)
+{
+    CMI8788AudioDevice *device = OSDynamicCast(CMI8788AudioDevice, target);
+    if (!device || newValue < 0 || newValue > 1)
+        return kIOReturnBadArgument;
+    device->setMonitor(device->monitorOn_, newValue == 1, control);
     return kIOReturnSuccess;
 }

@@ -8,6 +8,7 @@
  *   stxctl status
  *   stxctl impedance <ohms>          headphone gain offset ("HP Amp Gain"):
  *                                    <32 -18 dB, <64 -12 dB, <300 -6 dB, else 0 dB
+ *   stxctl input line|mic|frontmic   input selection (as in Sound preferences)
  *   stxctl monitor off|half|full     hardware input monitoring (half = -6 dB)
  *   stxctl filter sharp|slow         DAC digital filter roll-off
  *   stxctl deemphasis on|off
@@ -23,6 +24,7 @@ static int usage(void)
     fprintf(stderr,
             "usage: stxctl status\n"
             "       stxctl impedance <ohms>\n"
+            "       stxctl input line|mic|frontmic\n"
             "       stxctl monitor off|half|full\n"
             "       stxctl filter sharp|slow\n"
             "       stxctl deemphasis on|off\n");
@@ -78,7 +80,9 @@ int main(int argc, char **argv)
     const char *cmd = argv[1], *arg = argc == 3 ? argv[2] : NULL;
     if (!strcmp(cmd, "status") && argc == 2) {
         printProperty(dev, CFSTR("HeadphoneImpedance"), "headphone impedance");
+        printProperty(dev, CFSTR("InputSourceName"), "input");
         printProperty(dev, CFSTR("InputMonitor"), "input monitor");
+        printProperty(dev, CFSTR("InputMonitorLevel"), "monitor level");
         printProperty(dev, CFSTR("DACFilter"), "DAC filter");
         printProperty(dev, CFSTR("Deemphasis"), "de-emphasis");
         rc = 0;
@@ -92,6 +96,9 @@ int main(int argc, char **argv)
             rc = set(dev, CFSTR("HeadphoneImpedance"),
                      CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &v));
         }
+    } else if (!strcmp(cmd, "input") && arg &&
+               (!strcmp(arg, "line") || !strcmp(arg, "mic") || !strcmp(arg, "frontmic"))) {
+        rc = set(dev, CFSTR("InputSource"), str(arg));
     } else if (!strcmp(cmd, "monitor") && arg &&
                (!strcmp(arg, "off") || !strcmp(arg, "half") || !strcmp(arg, "full"))) {
         rc = set(dev, CFSTR("InputMonitor"), str(arg));
