@@ -24,3 +24,6 @@ hackintosh/
 # Build output
 build/
 dist/
+
+# macOS Finder metadata
+.DS_Store
