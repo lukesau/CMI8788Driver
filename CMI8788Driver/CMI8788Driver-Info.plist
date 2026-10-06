@@ -43,11 +43,11 @@
 		<key>com.apple.iokit.IOPCIFamily</key>
 		<string>2.9</string>
 		<key>com.apple.kpi.iokit</key>
-		<string>19.0</string>
+		<string>${KPI_VERSION}</string>
 		<key>com.apple.kpi.libkern</key>
-		<string>19.0</string>
+		<string>${KPI_VERSION}</string>
 		<key>com.apple.kpi.mach</key>
-		<string>19.0</string>
+		<string>${KPI_VERSION}</string>
 	</dict>
 </dict>
 </plist>

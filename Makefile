@@ -1,6 +1,7 @@
 # Builds CMI8788Driver.kext without Xcode (Command Line Tools are enough).
 #
-#   make            build build/CMI8788Driver.kext (run on the Catalina box)
+#   make            build the kexts (10.15+ and 10.9), the STX app and stxctl
+#   make kext       just build/CMI8788Driver.kext (MINOS=10.9 SDK=... BUILD=... for others)
 #   make remote     rsync this checkout to $(REMOTE) and build there
 #   make load       copy to /tmp, chown root:wheel, kextutil it (needs SIP off)
 #   make unload     kextunload it
@@ -12,15 +13,21 @@
 PRODUCT   := CMI8788Driver
 BUNDLE_ID := com.lukesau.driver.$(PRODUCT)
 VERSION   := 0.1.0
-MINOS     := 10.15
+MINOS     ?= 10.15
+# OSBundleLibraries kpi version = the Darwin version of MINOS
+# (10.x -> x+4, 11-15 -> +9, 26+ -> -1 since macOS jumped from 15 to 26).
+KPI_VERSION := $(shell echo $(MINOS) | awk -F. '{ print ($$1 == 10 ? $$2 + 4 : $$1 >= 26 ? $$1 - 1 : $$1 + 9) ".0" }')
 
 SRC_DIR   := CMI8788Driver
-BUILD     := build
+BUILD     ?= build
 KEXT      := $(BUILD)/$(PRODUCT).kext
 
 # Prefer the 10.15 SDK from Command Line Tools 12.4; fall back to whatever xcrun finds.
-SDK ?= $(firstword $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk) \
+SDK ?= $(firstword $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk \
+                              hackintosh/SDKs/MacOSX10.15.sdk) \
                    $(shell xcrun --show-sdk-path 2>/dev/null))
+# The 10.9 SDK (from Xcode 6.1.1) builds the 10.9 kext.
+SDK_10_9 ?= $(firstword $(wildcard hackintosh/SDKs/MacOSX10.9.sdk sdks/MacOSX10.9.sdk))
 KERNEL_HEADERS := $(SDK)/System/Library/Frameworks/Kernel.framework/Headers
 
 CXX := xcrun clang++
@@ -34,7 +41,8 @@ KERNFLAGS := -mkernel -fapple-kext -nostdinc -fno-builtin -fno-common \
 WARNFLAGS := -Wall -Wno-unused-parameter -Wno-\#warnings -Wno-deprecated-declarations
 CXXFLAGS  := $(ARCHFLAGS) $(KERNFLAGS) $(WARNFLAGS) -std=gnu++14 -fno-exceptions -fno-rtti -O2 -g
 CFLAGS    := $(ARCHFLAGS) $(filter-out -fapple-kext,$(KERNFLAGS)) $(WARNFLAGS) -O2 -g
-LDFLAGS   := $(ARCHFLAGS) -nostdlib -Xlinker -kext -lkmodc++ -lkmod -lcc_kext
+# -isysroot so libkmod/libkmodc++ come from the target SDK, not the host's newest one.
+LDFLAGS   := $(ARCHFLAGS) -isysroot $(SDK) -nostdlib -Xlinker -kext -lkmodc++ -lkmod -lcc_kext
 
 SRCS := $(wildcard $(SRC_DIR)/*.cpp)
 OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD)/obj/%.o,$(SRCS)) $(BUILD)/obj/kmod_info.o
@@ -42,12 +50,20 @@ OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD)/obj/%.o,$(SRCS)) $(BUILD)/obj/kmod_
 REMOTE     ?= hackintosh
 REMOTE_DIR ?= CMI8788Driver
 
-.PHONY: all clean remote load unload pkg dist remote-dist
+.PHONY: all kext kext-10.9 need-sdk-10.9 clean remote load unload pkg dist remote-dist
 
-STXCTL := $(BUILD)/stxctl
-APP    := $(BUILD)/STX.app
+STXCTL    := $(BUILD)/stxctl
+APP       := $(BUILD)/STX.app
+KEXT_10_9 := $(BUILD)/10.9/$(PRODUCT).kext
 
-all: $(KEXT) $(STXCTL) $(APP)
+all: $(KEXT) kext-10.9 $(STXCTL) $(APP)
+kext: $(KEXT)
+
+kext-10.9: need-sdk-10.9
+	$(MAKE) kext MINOS=10.9 SDK=$(abspath $(SDK_10_9)) BUILD=$(BUILD)/10.9
+
+need-sdk-10.9:
+	@test -d "$(SDK_10_9)" || { echo "need the 10.9 SDK (Xcode 6.1.1): set SDK_10_9=/path/to/MacOSX10.9.sdk"; exit 1; }
 
 $(STXCTL): tools/stxctl.c | $(BUILD)/obj
 	$(CC) -arch x86_64 -mmacosx-version-min=$(MINOS) -isysroot $(SDK) -O2 -Wall \
@@ -89,6 +105,7 @@ $(KEXT): $(OBJS) $(SRC_DIR)/$(PRODUCT)-Info.plist
 	    -e 's/$${PRODUCT_NAME:rfc1034identifier}/$(PRODUCT)/g' \
 	    -e 's/$${PRODUCT_NAME}/$(PRODUCT)/g' \
 	    -e 's/$${MODULE_VERSION}/$(VERSION)/g' \
+	    -e 's/$${KPI_VERSION}/$(KPI_VERSION)/g' \
 	    $(SRC_DIR)/$(PRODUCT)-Info.plist > $@/Contents/Info.plist
 	plutil -lint $@/Contents/Info.plist
 
