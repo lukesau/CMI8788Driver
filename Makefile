@@ -26,8 +26,10 @@ KEXT      := $(BUILD)/$(PRODUCT).kext
 SDK ?= $(firstword $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX10.15.sdk \
                               hackintosh/SDKs/MacOSX10.15.sdk) \
                    $(shell xcrun --show-sdk-path 2>/dev/null))
-# The 10.9 SDK (from Xcode 6.1.1) builds the 10.9 kext.
+# The 10.9 SDK (from Xcode 6.1.1) builds the 10.9 kext, and the app and stxctl,
+# which target 10.9 so one copy runs on every macOS the driver supports.
 SDK_10_9 ?= $(firstword $(wildcard hackintosh/SDKs/MacOSX10.9.sdk sdks/MacOSX10.9.sdk))
+TOOLS_MINOS := 10.9
 KERNEL_HEADERS := $(SDK)/System/Library/Frameworks/Kernel.framework/Headers
 
 CXX := xcrun clang++
@@ -65,17 +67,17 @@ kext-10.9: need-sdk-10.9
 need-sdk-10.9:
 	@test -d "$(SDK_10_9)" || { echo "need the 10.9 SDK (Xcode 6.1.1): set SDK_10_9=/path/to/MacOSX10.9.sdk"; exit 1; }
 
-$(STXCTL): tools/stxctl.c | $(BUILD)/obj
-	$(CC) -arch x86_64 -mmacosx-version-min=$(MINOS) -isysroot $(SDK) -O2 -Wall \
+$(STXCTL): tools/stxctl.c | need-sdk-10.9 $(BUILD)/obj
+	$(CC) -arch x86_64 -mmacosx-version-min=$(TOOLS_MINOS) -isysroot $(SDK_10_9) -O2 -Wall \
 	    -framework IOKit -framework CoreFoundation $< -o $@
 
 # Menu bar app, built without Xcode. Ad-hoc signed.
-$(APP): app/STX/main.swift app/STX/Info.plist app/STX/AppIcon.icns | $(BUILD)/obj
+$(APP): app/STX/main.m app/STX/Info.plist app/STX/AppIcon.icns | need-sdk-10.9 $(BUILD)/obj
 	@rm -rf $@
 	@mkdir -p $@/Contents/MacOS $@/Contents/Resources
 	cp app/STX/AppIcon.icns $@/Contents/Resources/
-	xcrun swiftc -O -target x86_64-apple-macos$(MINOS) -sdk $(SDK) app/STX/main.swift \
-	    -o $@/Contents/MacOS/STX
+	$(CC) -arch x86_64 -mmacosx-version-min=$(TOOLS_MINOS) -isysroot $(SDK_10_9) -O2 -Wall \
+	    -fno-objc-arc -framework AppKit -framework IOKit app/STX/main.m -o $@/Contents/MacOS/STX
 	sed -e 's/$${MODULE_VERSION}/$(VERSION)/g' app/STX/Info.plist > $@/Contents/Info.plist
 	plutil -lint $@/Contents/Info.plist
 	codesign -s - -f $@

@@ -23,7 +23,7 @@
 	<key>CFBundleVersion</key>
 	<string>${MODULE_VERSION}</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>10.15</string>
+	<string>10.9</string>
 	<key>LSMultipleInstancesProhibited</key>
 	<true/>
 	<key>LSUIElement</key>
