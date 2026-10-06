@@ -9,7 +9,8 @@ built on the C-Media CMI8788 ("Oxygen HD") chip. It is a port of the Linux
 [`CMI8788Chip.cpp`](CMI8788Driver/CMI8788Chip.cpp) names the Linux function it
 mirrors.
 
-Target: Intel Macs / hackintoshes, developed on macOS Catalina 10.15.
+Target: Intel Macs / hackintoshes on macOS 10.15 Catalina and later, and OS X
+10.9 Mavericks (a separate build of the kext). Developed on 10.15.7 and 10.9.5.
 
 ## Status
 
@@ -43,9 +44,11 @@ behind a PEX8112): playback at 44.1-192 kHz, volume / mute / balance, switching
 between Headphones and Line Out during playback, stereo line-in capture (clean
 1 kHz tone, correct channels), sleep / wake with audio playing, a ModMic on the
 mic input with hardware monitoring, the STX app and installer, and repeated
-load / unload with the card present. Untested: front-panel jacks, the STX II,
-other macOS versions, and the installer's kext component. Loading through
-OpenCore injection is how the dev box runs it.
+load / unload with the card present. On OS X 10.9.5 (same box): the 10.9 kext
+loaded with `kextutil` and injected by OpenCore, playback, headphone impedance,
+sleep / wake, and the STX app from the installer. Untested: front-panel jacks,
+the STX II, macOS 10.10–10.14 and 11+, and the installer's kext component.
+Loading through OpenCore injection is how the dev box runs it.
 
 ### Debugging
 
@@ -67,25 +70,23 @@ Audacity) instead.
 Requirements: an Intel Mac or hackintosh with a Xonar Essence STX or STX II
 (PCIe; the plain Essence ST is PCI and isn't supported), with the card's
 auxiliary power connector plugged in. Requires macOS 10.15 Catalina or later
-(developed and tested on 10.15.7). Download `CMI8788Driver-<version>.pkg`
+(`CMI8788Driver.kext`), or OS X 10.9 Mavericks (`CMI8788Driver-10.9.kext`).
+Download `CMI8788Driver-<version>.pkg`
 (installer) or `.zip` from the releases page. Neither is signed: right-click the
 installer and choose Open.
 
-> **Older macOS:** not supported. The driver itself uses nothing newer than
-> what IOAudioFamily offered around 10.9, so a rebuild with a lower deployment
-> target (and a replacement for the IOAudioFamily float-conversion helpers)
-> would plausibly run on 10.9–10.14; the Swift STX app would additionally need
-> the Swift runtime bundled before 10.14.4. Snow Leopard–era systems (e.g.
-> 2006–2012 Mac Pros) would need a separate port: an i386 kernel slice, an
-> old Xcode toolchain, and an Objective-C app. Not planned, but contributions
-> welcome.
+> **Other macOS versions:** 10.10–10.14 are untested; the 10.9 kext will
+> plausibly load there. Snow Leopard–era systems (e.g. 2006–2012 Mac Pros on
+> 10.6–10.8) would need an i386 kernel slice and an older toolchain. Not
+> planned, but contributions welcome.
 
 The installer has two parts (Customize to choose):
 
-- **STX menu bar app and tools**: `STX.app` (starts at login), `stxctl`, and a
-  copy of the kext plus `uninstall.sh` in `/Library/Application Support/CMI8788Driver/`.
-- **Driver (kext) in /Library/Extensions**: the SIP-off route below. OpenCore
-  users untick this and inject the kext instead.
+- **STX menu bar app and tools**: `STX.app` (starts at login), `stxctl`, and
+  copies of both kexts plus `uninstall.sh` in `/Library/Application Support/CMI8788Driver/`.
+- **Driver (kext) in /Library/Extensions**: the SIP-off route below, with the
+  kext built for the macOS it runs on. OpenCore users untick this and inject
+  the kext instead.
 
 To uninstall: `sudo sh "/Library/Application Support/CMI8788Driver/uninstall.sh"`.
 
@@ -111,11 +112,28 @@ one of these two ways.
 
 3. Run `ocvalidate`, reboot. SIP can stay enabled.
 
+**On OS X 10.9**, use `CMI8788Driver-10.9.kext` (BundlePath
+`CMI8788Driver-10.9.kext`, MaxKernel `13.99.99`). 10.9's kernel cache leaves
+out IOAudioFamily, which the kext links against, so also add two
+`Kernel` → `Force` entries, in this order, both with MaxKernel `13.99.99`:
+
+| BundlePath | Identifier | ExecutablePath |
+|---|---|---|
+| `System/Library/Extensions/OSvKernDSPLib.kext` | `com.apple.kext.OSvKernDSPLib` | `Contents/MacOS/OSvKernDSPLib` |
+| `System/Library/Extensions/IOAudioFamily.kext` | `com.apple.iokit.IOAudioFamily` | `Contents/MacOS/IOAudioFamily` |
+
+(Arch `Any`, PlistPath `Contents/Info.plist`, Enabled `true`.) Without them
+the OpenCore log shows "Dependency com.apple.iokit.IOAudioFamily was not found"
+and the kext isn't loaded.
+
 Card settings can go in the injected kext's `Info.plist` as boot defaults (see
 Configuration), e.g. `HeadphoneImpedance`; the STX app overrides them after
 login with whatever you chose last.
 
 ### Any Intel Mac: SIP off, load from /Library/Extensions
+
+(OS X 10.9 has no SIP: skip step 1 and use `CMI8788Driver-10.9.kext`. OS X
+says the kext is "not from an identified developer" and loads it anyway.)
 
 1. Disable SIP's kext signing check from Recovery: `csrutil disable` (or
    `csrutil enable --without kext`). On a hackintosh, OpenCore's Toggle SIP
@@ -205,17 +223,20 @@ hackintoshes, which are supported up to macOS 26 Tahoe.
 | `CMI8788Driver/CMI8788Chip.*` | Hardware layer: register/I2C/AC'97 access, chip and STX init, rates, DMA, interrupts |
 | `CMI8788Driver/CMI8788AudioEngine.*` | IOAudioEngine: DMA buffers, timestamps, format changes, sample conversion |
 | `CMI8788Driver/CMI8788AudioDevice.*` | IOAudioDevice: matching, bring-up, controls, card settings, sleep/wake |
-| `app/STX/` | STX menu bar app (Swift/AppKit) |
+| `app/STX/` | STX menu bar app (Objective-C/AppKit; one binary for 10.9 and later) |
 | `tools/stxctl.c` | Command-line settings tool |
 | `installer/` | Installer package: distribution, scripts, LaunchAgent, uninstaller |
 | `scripts/make-banner.sh` | Rebuilds `docs/banner.png` from `docs/screenshots/` (ImageMagick) |
 
 ## Building
 
-Needs Command Line Tools with the 10.15 SDK (no Xcode project).
+Needs Command Line Tools (no Xcode project), plus two old SDKs: 10.15 (Command
+Line Tools 12.4) for the 10.15+ kext, and 10.9 (from Xcode 6.1.1 on
+developer.apple.com) for the 10.9 kext, the STX app and `stxctl`. Point `SDK`
+and `SDK_10_9` at them if they aren't found.
 
 ```sh
-make            # build/CMI8788Driver.kext
+make            # both kexts (build/, build/10.9/), STX.app, stxctl
 make remote     # rsync to the dev box (ssh host "hackintosh") and build there
 make load       # on the box: copy to /tmp, chown root:wheel, kextutil (SIP must be off)
 make unload
