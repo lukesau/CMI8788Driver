@@ -11,7 +11,7 @@
 
 PRODUCT   := CMI8788Driver
 BUNDLE_ID := com.lukesau.driver.$(PRODUCT)
-VERSION   := 0.1.0
+VERSION   := 0.2.0
 MINOS     ?= 10.15
 # OSBundleLibraries kpi version = the Darwin version of MINOS
 # (10.x -> x+4, 11-15 -> +9, 26+ -> -1 since macOS jumped from 15 to 26).
