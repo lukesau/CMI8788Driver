@@ -1,12 +1,22 @@
 #!/bin/sh
 # Start the STX menu bar app for the logged-in user (it also starts at login
 # through /Library/LaunchAgents/com.lukesau.stx.plist).
-chown root:wheel /Library/LaunchAgents/com.lukesau.stx.plist
-chmod 644 /Library/LaunchAgents/com.lukesau.stx.plist
+plist=/Library/LaunchAgents/com.lukesau.stx.plist
+chown root:wheel "$plist"
+chmod 644 "$plist"
 user=$(stat -f %Su /dev/console)
 if [ -n "$user" ] && [ "$user" != "root" ]; then
     uid=$(id -u "$user")
-    launchctl bootout gui/"$uid"/com.lukesau.stx 2>/dev/null
-    launchctl bootstrap gui/"$uid" /Library/LaunchAgents/com.lukesau.stx.plist 2>/dev/null || true
+    if [ "$(sw_vers -productVersion | cut -d. -f2)" -ge 10 ] || [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 11 ]; then
+        launchctl bootout gui/"$uid"/com.lukesau.stx 2>/dev/null
+        launchctl bootstrap gui/"$uid" "$plist" 2>/dev/null || true
+    else
+        # 10.9 has no bootstrap/bootout: load it in the user's login session.
+        lw=$(pgrep -x -u "$uid" loginwindow | head -1)
+        if [ -n "$lw" ]; then
+            launchctl bsexec "$lw" sudo -u "$user" launchctl unload -S Aqua "$plist" 2>/dev/null
+            launchctl bsexec "$lw" sudo -u "$user" launchctl load -S Aqua "$plist" 2>/dev/null || true
+        fi
+    fi
 fi
 exit 0

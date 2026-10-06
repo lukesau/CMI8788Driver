@@ -7,7 +7,6 @@
 #   make unload     kextunload it
 #   make pkg        installer package (STX app + tools, kext) in dist/
 #   make dist       release zip and installer in dist/
-#   make remote-dist build both on $(REMOTE) and copy them back
 #   make clean
 
 PRODUCT   := CMI8788Driver
@@ -52,7 +51,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD)/obj/%.o,$(SRCS)) $(BUILD)/obj/kmod_
 REMOTE     ?= hackintosh
 REMOTE_DIR ?= CMI8788Driver
 
-.PHONY: all kext kext-10.9 need-sdk-10.9 clean remote load unload pkg dist remote-dist
+.PHONY: all kext kext-10.9 need-sdk-10.9 clean remote load unload pkg dist
 
 STXCTL    := $(BUILD)/stxctl
 APP       := $(BUILD)/STX.app
@@ -117,24 +116,28 @@ $(BUILD)/obj:
 clean:
 	rm -rf $(BUILD) dist
 
-# Installer: two component packages (app + tools, kext) under one product with
-# a choice per component; see installer/distribution.xml.
-PKG       := dist/$(PRODUCT)-$(VERSION).pkg
-PKGBUILD  := $(BUILD)/pkg
-APP_ROOT  := $(PKGBUILD)/app-root
-KEXT_ROOT := $(PKGBUILD)/kext-root
-SUPPORT   := $(APP_ROOT)/Library/Application Support/$(PRODUCT)
+# Installer: component packages (app + tools, kext for 10.15+, kext for 10.9)
+# under one product with a choice per component; see installer/distribution.xml.
+PKG        := dist/$(PRODUCT)-$(VERSION).pkg
+PKGBUILD   := $(BUILD)/pkg
+APP_ROOT   := $(PKGBUILD)/app-root
+KEXT_ROOT  := $(PKGBUILD)/kext-root
+KEXT9_ROOT := $(PKGBUILD)/kext9-root
+SUPPORT    := $(APP_ROOT)/Library/Application Support/$(PRODUCT)
 
 pkg: all
 	rm -rf $(PKGBUILD)
 	mkdir -p $(APP_ROOT)/Applications $(APP_ROOT)/Library/LaunchAgents $(APP_ROOT)/usr/local/bin \
-	         "$(SUPPORT)" $(KEXT_ROOT)/Library/Extensions $(PKGBUILD)/resources dist
+	         "$(SUPPORT)" $(KEXT_ROOT)/Library/Extensions $(KEXT9_ROOT)/Library/Extensions \
+	         $(PKGBUILD)/resources dist
 	cp -R $(APP) $(APP_ROOT)/Applications/
 	cp installer/com.lukesau.stx.plist $(APP_ROOT)/Library/LaunchAgents/
 	cp $(STXCTL) $(APP_ROOT)/usr/local/bin/
 	cp -R $(KEXT) installer/uninstall.sh "$(SUPPORT)/"
+	cp -R $(KEXT_10_9) "$(SUPPORT)/$(PRODUCT)-10.9.kext"
 	cp -R $(KEXT) $(KEXT_ROOT)/Library/Extensions/
-	for c in app kext; do \
+	cp -R $(KEXT_10_9) $(KEXT9_ROOT)/Library/Extensions/
+	for c in app kext kext9; do \
 	    pkgbuild --analyze --root $(PKGBUILD)/$$c-root $(PKGBUILD)/$$c.plist >/dev/null && \
 	    n=$$(plutil -convert json -o - $(PKGBUILD)/$$c.plist | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))') && \
 	    i=0; while [ $$i -lt $$n ]; do \
@@ -144,6 +147,8 @@ pkg: all
 	    --identifier com.lukesau.stx.app --version $(VERSION) --install-location / $(PKGBUILD)/STX-app.pkg
 	pkgbuild --root $(KEXT_ROOT) --component-plist $(PKGBUILD)/kext.plist --scripts installer/scripts-kext \
 	    --identifier $(BUNDLE_ID) --version $(VERSION) --install-location / $(PKGBUILD)/$(PRODUCT)-kext.pkg
+	pkgbuild --root $(KEXT9_ROOT) --component-plist $(PKGBUILD)/kext9.plist --scripts installer/scripts-kext \
+	    --identifier $(BUNDLE_ID).10.9 --version $(VERSION) --install-location / $(PKGBUILD)/$(PRODUCT)-kext-10.9.pkg
 	cp installer/resources/* $(PKGBUILD)/resources/
 	cp COPYING $(PKGBUILD)/resources/COPYING.txt
 	productbuild --distribution installer/distribution.xml --resources $(PKGBUILD)/resources \
@@ -156,15 +161,9 @@ dist:
 	$(MAKE) all
 	mkdir -p dist/$(PRODUCT)-$(VERSION)
 	cp -R $(KEXT) $(STXCTL) $(APP) installer/uninstall.sh README.md COPYING dist/$(PRODUCT)-$(VERSION)/
-	cd dist && ditto -c -k --keepParent $(PRODUCT)-$(VERSION) $(PRODUCT)-$(VERSION).zip
+	cp -R $(KEXT_10_9) dist/$(PRODUCT)-$(VERSION)/$(PRODUCT)-10.9.kext
+	cd dist && ditto -c -k --norsrc --keepParent $(PRODUCT)-$(VERSION) $(PRODUCT)-$(VERSION).zip
 	$(MAKE) pkg
-	shasum -a 256 $(DIST_ZIP) $(PKG)
-
-remote-dist:
-	rsync -a --delete --exclude .git --exclude hackintosh --exclude build --exclude dist ./ $(REMOTE):$(REMOTE_DIR)/
-	ssh $(REMOTE) 'cd $(REMOTE_DIR) && make dist'
-	mkdir -p dist
-	scp $(REMOTE):$(REMOTE_DIR)/$(DIST_ZIP) $(REMOTE):$(REMOTE_DIR)/$(PKG) dist/
 	shasum -a 256 $(DIST_ZIP) $(PKG)
 
 remote:

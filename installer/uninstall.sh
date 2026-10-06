@@ -1,6 +1,6 @@
 #!/bin/sh
 # Remove CMI8788Driver and the STX app. Run with: sudo sh uninstall.sh
-# (OpenCore users: also remove CMI8788Driver.kext from EFI/OC/Kexts and its
+# (OpenCore users: also remove CMI8788Driver.kext (or -10.9.kext) from EFI/OC/Kexts and its
 # Kernel > Add entry in config.plist.)
 if [ "$(id -u)" != 0 ]; then echo "run with sudo"; exit 1; fi
 user=$(stat -f %Su /dev/console)
@@ -17,4 +17,5 @@ else
 fi
 pkgutil --forget com.lukesau.stx.app >/dev/null 2>&1
 pkgutil --forget com.lukesau.driver.CMI8788Driver >/dev/null 2>&1
+pkgutil --forget com.lukesau.driver.CMI8788Driver.10.9 >/dev/null 2>&1
 echo "CMI8788Driver and STX removed."

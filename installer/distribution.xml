@@ -6,18 +6,31 @@
     <license file="COPYING.txt"/>
     <options customize="always" require-scripts="false" hostArchitectures="x86_64"/>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <script>
+    function catalinaOrLater() {
+        return system.compareVersions(system.version.ProductVersion, '10.15') >= 0;
+    }
+    </script>
     <choices-outline>
         <line choice="app"/>
         <line choice="kext"/>
+        <line choice="kext-10.9"/>
     </choices-outline>
     <choice id="app" title="STX menu bar app and tools"
-            description="The STX menu bar app (headphone impedance, input monitoring, DAC filter, de-emphasis), the stxctl command, and a copy of the kext for OpenCore in /Library/Application Support/CMI8788Driver.">
+            description="The STX menu bar app (headphone impedance, input monitoring, DAC filter, de-emphasis), the stxctl command, and copies of the kext for OpenCore in /Library/Application Support/CMI8788Driver.">
         <pkg-ref id="com.lukesau.stx.app"/>
     </choice>
     <choice id="kext" title="Driver (kext) in /Library/Extensions"
+            visible="catalinaOrLater()" selected="catalinaOrLater()" enabled="catalinaOrLater()"
             description="Installs CMI8788Driver.kext for loading by macOS. Needs SIP's kext signing check disabled. OpenCore users: untick this and add the kext to EFI/OC/Kexts instead (the app's &quot;Show Kext for OpenCore&quot; menu item finds it).">
         <pkg-ref id="com.lukesau.driver.CMI8788Driver"/>
     </choice>
+    <choice id="kext-10.9" title="Driver (kext) in /Library/Extensions"
+            visible="!catalinaOrLater()" selected="!catalinaOrLater()" enabled="!catalinaOrLater()"
+            description="Installs the OS X 10.9 build of CMI8788Driver.kext for loading by macOS (OS X shows a &quot;not from an identified developer&quot; notice, then loads it). OpenCore users: untick this and add CMI8788Driver-10.9.kext to EFI/OC/Kexts instead, with IOAudioFamily force-loaded (see the README).">
+        <pkg-ref id="com.lukesau.driver.CMI8788Driver.10.9"/>
+    </choice>
     <pkg-ref id="com.lukesau.stx.app" version="0">STX-app.pkg</pkg-ref>
     <pkg-ref id="com.lukesau.driver.CMI8788Driver" version="0">CMI8788Driver-kext.pkg</pkg-ref>
+    <pkg-ref id="com.lukesau.driver.CMI8788Driver.10.9" version="0">CMI8788Driver-kext-10.9.pkg</pkg-ref>
 </installer-gui-script>
