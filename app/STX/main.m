@@ -16,12 +16,12 @@
 static NSString *const kDriverClass = @"CMI8788AudioDevice";
 static NSString *const kKextSupportDir = @"/Library/Application Support/CMI8788Driver";
 
-/* The kext copy for OpenCore: the 10.9 build on Mavericks, else the 10.15+ one. */
+/* The kext copy for OpenCore: the 10.9 build before 10.15, else the 10.15+ one. */
 static NSString *kextSupportPath(void)
 {
-    BOOL mavericks = NSAppKitVersionNumber < 1343;  /* NSAppKitVersionNumber10_10 */
+    BOOL preCatalina = NSAppKitVersionNumber < 1894;  /* NSAppKitVersionNumber10_15 */
     return [kKextSupportDir stringByAppendingPathComponent:
-            mavericks ? @"CMI8788Driver-10.9.kext" : @"CMI8788Driver.kext"];
+            preCatalina ? @"CMI8788Driver-10.9.kext" : @"CMI8788Driver.kext"];
 }
 
 // The driver's settings (I/O registry property keys), also the saved defaults keys.

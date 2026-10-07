@@ -95,8 +95,9 @@ one of these two ways.
 
 ### Hackintosh / OpenCore Legacy Patcher Macs: inject with OpenCore
 
-1. Copy `CMI8788Driver.kext` to `EFI/OC/Kexts/` (with the installer, the STX
-   menu's "Show Kext for OpenCore…" finds it).
+1. Copy `CMI8788Driver.kext` (macOS 10.15 and later) to `EFI/OC/Kexts/`;
+   before 10.15, see below. With the installer, the STX menu's "Show Kext for
+   OpenCore…" finds the right one for the running macOS.
 2. Add an entry to `config.plist` under `Kernel` → `Add`:
 
    | Key | Type | Value |
@@ -112,8 +113,10 @@ one of these two ways.
 
 3. Run `ocvalidate`, reboot. SIP can stay enabled.
 
-**On OS X 10.9**, use `CMI8788Driver-10.9.kext` (BundlePath
-`CMI8788Driver-10.9.kext`, MaxKernel `13.99.99`). 10.9's kernel cache leaves
+**Before macOS 10.15**, use `CMI8788Driver-10.9.kext` (BundlePath
+`CMI8788Driver-10.9.kext`, MaxKernel `18.99.99`): `CMI8788Driver.kext` needs
+the 10.15 kernel and won't load on anything older. Only 10.9 has been tested;
+10.10–10.14 are not. On OS X 10.9 the kernel cache leaves
 out IOAudioFamily, which the kext links against, so also add two
 `Kernel` → `Force` entries, in this order, both with MaxKernel `13.99.99`:
 
@@ -132,8 +135,11 @@ login with whatever you chose last.
 
 ### Any Intel Mac: SIP off, load from /Library/Extensions
 
-(OS X 10.9 has no SIP: skip step 1 and use `CMI8788Driver-10.9.kext`. OS X
-says the kext is "not from an identified developer" and loads it anyway.)
+(Before macOS 10.15, use `CMI8788Driver-10.9.kext` in step 2, copied as
+`/Library/Extensions/CMI8788Driver.kext` like the installer does;
+`CMI8788Driver.kext` needs 10.15. OS X 10.9 has no SIP: skip step 1. OS X
+says the kext is "not from an identified developer" and loads it anyway.
+10.10–10.14 are untested.)
 
 1. Disable SIP's kext signing check from Recovery: `csrutil disable` (or
    `csrutil enable --without kext`). On a hackintosh, OpenCore's Toggle SIP
